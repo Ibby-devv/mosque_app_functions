@@ -1,7 +1,16 @@
-import {onSchedule} from "firebase-functions/v2/scheduler";
+import { onSchedule } from "firebase-functions/v2/scheduler";
 import * as admin from "firebase-admin";
 
 admin.initializeApp();
+
+export {
+  createPaymentIntent,
+  createSubscription,
+  cancelSubscription,
+  getDonationSettings
+} from "./donations";
+
+export { handleStripeWebhook } from "./webhooks";
 
 // Runs every day at midnight Sydney time
 export const updatePrayerTimes = onSchedule(
@@ -15,7 +24,8 @@ export const updatePrayerTimes = onSchedule(
       console.log("🕌 Auto-updating prayer times...");
 
       // Get mosque settings from Firestore
-      const settingsDoc = await admin.firestore()
+      const settingsDoc = await admin
+        .firestore()
         .collection("mosqueSettings")
         .doc("info")
         .get();
@@ -63,7 +73,8 @@ export const updatePrayerTimes = onSchedule(
       const timings = data.data.timings;
 
       // Get current prayer times to preserve Iqama settings
-      const prayerTimesRef = admin.firestore()
+      const prayerTimesRef = admin
+        .firestore()
         .collection("prayerTimes")
         .doc("current");
 
@@ -75,12 +86,16 @@ export const updatePrayerTimes = onSchedule(
       }
 
       // Update only Adhan times, keep all Iqama settings
-      const sydneyDate = new Date().toLocaleString("en-AU", {
-        timeZone: "Australia/Sydney",
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-      }).split("/").reverse().join("-"); // Convert DD/MM/YYYY to YYYY-MM-DD
+      const sydneyDate = new Date()
+        .toLocaleString("en-AU", {
+          timeZone: "Australia/Sydney",
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+        })
+        .split("/")
+        .reverse()
+        .join("-"); // Convert DD/MM/YYYY to YYYY-MM-DD
 
       await prayerTimesRef.update({
         fajr_adhan: convertTo12Hour(timings.Fajr),
@@ -101,7 +116,5 @@ export const updatePrayerTimes = onSchedule(
     } catch (error) {
       console.error("❌ Error updating prayer times:", error);
     }
-  },
+  }
 );
-
-
