@@ -1,4 +1,4 @@
-import { onSchedule } from "firebase-functions/v2/scheduler";
+import {onSchedule} from "firebase-functions/v2/scheduler";
 import * as admin from "firebase-admin";
 
 admin.initializeApp();
@@ -7,10 +7,9 @@ export {
   createPaymentIntent,
   createSubscription,
   cancelSubscription,
-  getDonationSettings
-} from "./donations";
+  getDonationSettings} from "./donations";
 
-export { handleStripeWebhook } from "./webhooks";
+export {handleStripeWebhook} from "./webhooks";
 
 // Runs every day at midnight Sydney time
 export const updatePrayerTimes = onSchedule(

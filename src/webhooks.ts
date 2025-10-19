@@ -33,18 +33,18 @@ const calculateNextPaymentDate = (frequency: string): string => {
   );
 
   switch (frequency) {
-    case "weekly":
-      sydneyTime.setDate(sydneyTime.getDate() + 7);
-      break;
-    case "fortnightly":
-      sydneyTime.setDate(sydneyTime.getDate() + 14);
-      break;
-    case "monthly":
-      sydneyTime.setMonth(sydneyTime.getMonth() + 1);
-      break;
-    case "yearly":
-      sydneyTime.setFullYear(sydneyTime.getFullYear() + 1);
-      break;
+  case "weekly":
+    sydneyTime.setDate(sydneyTime.getDate() + 7);
+    break;
+  case "fortnightly":
+    sydneyTime.setDate(sydneyTime.getDate() + 14);
+    break;
+  case "monthly":
+    sydneyTime.setMonth(sydneyTime.getMonth() + 1);
+    break;
+  case "yearly":
+    sydneyTime.setFullYear(sydneyTime.getFullYear() + 1);
+    break;
   }
 
   return sydneyTime.toISOString().split("T")[0]; // YYYY-MM-DD
@@ -93,50 +93,50 @@ export const handleStripeWebhook = onRequest(
 
     try {
       switch (event.type) {
-        // One-time payment succeeded
-        case "payment_intent.succeeded":
-          await handlePaymentIntentSucceeded(
+      // One-time payment succeeded
+      case "payment_intent.succeeded":
+        await handlePaymentIntentSucceeded(
             event.data.object as Stripe.PaymentIntent,
             stripe
-          );
-          break;
+        );
+        break;
 
         // One-time payment failed
-        case "payment_intent.payment_failed":
-          await handlePaymentIntentFailed(
+      case "payment_intent.payment_failed":
+        await handlePaymentIntentFailed(
             event.data.object as Stripe.PaymentIntent
-          );
-          break;
+        );
+        break;
 
         // Subscription created (recurring donation started)
-        case "customer.subscription.created":
-          await handleSubscriptionCreated(
+      case "customer.subscription.created":
+        await handleSubscriptionCreated(
             event.data.object as Stripe.Subscription
-          );
-          break;
+        );
+        break;
 
         // Subscription payment succeeded (recurring payment)
-        case "invoice.payment_succeeded":
-          await handleInvoicePaymentSucceeded(
+      case "invoice.payment_succeeded":
+        await handleInvoicePaymentSucceeded(
             event.data.object as Stripe.Invoice,
             stripe
-          );
-          break;
+        );
+        break;
 
         // Subscription payment failed
-        case "invoice.payment_failed":
-          await handleInvoicePaymentFailed(event.data.object as Stripe.Invoice);
-          break;
+      case "invoice.payment_failed":
+        await handleInvoicePaymentFailed(event.data.object as Stripe.Invoice);
+        break;
 
         // Subscription cancelled
-        case "customer.subscription.deleted":
-          await handleSubscriptionDeleted(
+      case "customer.subscription.deleted":
+        await handleSubscriptionDeleted(
             event.data.object as Stripe.Subscription
-          );
-          break;
+        );
+        break;
 
-        default:
-          logger.info("Unhandled webhook event type", { type: event.type });
+      default:
+        logger.info("Unhandled webhook event type", { type: event.type });
       }
 
       res.json({ received: true });
