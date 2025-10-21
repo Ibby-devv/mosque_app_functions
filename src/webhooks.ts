@@ -1,3 +1,5 @@
+/* eslint-disable require-jsdoc */
+/* eslint-disable operator-linebreak */
 // ============================================================================
 // CLOUD FUNCTIONS: STRIPE WEBHOOK HANDLER
 // Location: mosque_app_functions/src/webhooks.ts
@@ -33,18 +35,18 @@ const calculateNextPaymentDate = (frequency: string): string => {
   );
 
   switch (frequency) {
-  case "weekly":
-    sydneyTime.setDate(sydneyTime.getDate() + 7);
-    break;
-  case "fortnightly":
-    sydneyTime.setDate(sydneyTime.getDate() + 14);
-    break;
-  case "monthly":
-    sydneyTime.setMonth(sydneyTime.getMonth() + 1);
-    break;
-  case "yearly":
-    sydneyTime.setFullYear(sydneyTime.getFullYear() + 1);
-    break;
+    case "weekly":
+      sydneyTime.setDate(sydneyTime.getDate() + 7);
+      break;
+    case "fortnightly":
+      sydneyTime.setDate(sydneyTime.getDate() + 14);
+      break;
+    case "monthly":
+      sydneyTime.setMonth(sydneyTime.getMonth() + 1);
+      break;
+    case "yearly":
+      sydneyTime.setFullYear(sydneyTime.getFullYear() + 1);
+      break;
   }
 
   return sydneyTime.toISOString().split("T")[0]; // YYYY-MM-DD
@@ -58,7 +60,8 @@ export const handleStripeWebhook = onRequest(
   {
     region: "australia-southeast1",
     cors: true,
-    secrets: ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"], // Secret Manager
+    // eslint-disable-next-line max-len
+    secrets: ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "RESEND_API_KEY"], // Secret Manager
   },
   async (req, res) => {
     // Initialize Stripe with secrets from Secret Manager
@@ -93,50 +96,50 @@ export const handleStripeWebhook = onRequest(
 
     try {
       switch (event.type) {
-      // One-time payment succeeded
-      case "payment_intent.succeeded":
-        await handlePaymentIntentSucceeded(
+        // One-time payment succeeded
+        case "payment_intent.succeeded":
+          await handlePaymentIntentSucceeded(
             event.data.object as Stripe.PaymentIntent,
             stripe
-        );
-        break;
+          );
+          break;
 
         // One-time payment failed
-      case "payment_intent.payment_failed":
-        await handlePaymentIntentFailed(
+        case "payment_intent.payment_failed":
+          await handlePaymentIntentFailed(
             event.data.object as Stripe.PaymentIntent
-        );
-        break;
+          );
+          break;
 
         // Subscription created (recurring donation started)
-      case "customer.subscription.created":
-        await handleSubscriptionCreated(
+        case "customer.subscription.created":
+          await handleSubscriptionCreated(
             event.data.object as Stripe.Subscription
-        );
-        break;
+          );
+          break;
 
         // Subscription payment succeeded (recurring payment)
-      case "invoice.payment_succeeded":
-        await handleInvoicePaymentSucceeded(
+        case "invoice.payment_succeeded":
+          await handleInvoicePaymentSucceeded(
             event.data.object as Stripe.Invoice,
             stripe
-        );
-        break;
+          );
+          break;
 
         // Subscription payment failed
-      case "invoice.payment_failed":
-        await handleInvoicePaymentFailed(event.data.object as Stripe.Invoice);
-        break;
+        case "invoice.payment_failed":
+          await handleInvoicePaymentFailed(event.data.object as Stripe.Invoice);
+          break;
 
         // Subscription cancelled
-      case "customer.subscription.deleted":
-        await handleSubscriptionDeleted(
+        case "customer.subscription.deleted":
+          await handleSubscriptionDeleted(
             event.data.object as Stripe.Subscription
-        );
-        break;
+          );
+          break;
 
-      default:
-        logger.info("Unhandled webhook event type", { type: event.type });
+        default:
+          logger.info("Unhandled webhook event type", { type: event.type });
       }
 
       res.json({ received: true });
@@ -461,14 +464,138 @@ async function handleInvoicePaymentSucceeded(
 // ============================================================================
 
 async function handleInvoicePaymentFailed(invoice: Stripe.Invoice) {
-  logger.warn("Invoice payment failed", {
+  logger.warn("⚠️ Payment failed", {
     invoiceId: invoice.id,
-    subscriptionId: invoice.subscription,
+    customerId: invoice.customer,
     amount: invoice.amount_due,
   });
 
-  // Stripe will automatically retry failed payments
-  // Optionally: Send notification to admin or donor
+  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
+    apiVersion: "2023-10-16",
+  });
+
+  try {
+    // Get customer email
+    const customer = await stripe.customers.retrieve(
+      invoice.customer as string
+    );
+    const customerEmail = (customer as Stripe.Customer).email;
+
+    if (!customerEmail) {
+      logger.error("No email found for customer", {
+        customerId: invoice.customer,
+      });
+      return;
+    }
+
+    // Create portal session for payment update
+    const portalSession = await stripe.billingPortal.sessions.create({
+      customer: invoice.customer as string,
+      return_url: "almadina://donations",
+    });
+
+    // Send failure notification email
+    const { Resend } = await import("resend");
+    const resend = new Resend(process.env.RESEND_API_KEY);
+
+    await resend.emails.send({
+      from: "Al Ansar <onboarding@resend.dev>",
+      to: customerEmail,
+      subject: "Payment Failed - Action Required",
+      html: `
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          </head>
+          <body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #f5f5f5;">
+            <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f5f5f5; padding: 20px;">
+              <tr>
+                <td align="center">
+                  <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 8px; overflow: hidden;">
+                    <tr>
+                      <td style="background-color: #dc2626; padding: 30px; text-align: center;">
+                        <h1 style="color: #ffffff; margin: 0; font-size: 28px;">⚠️ Payment Failed</h1>
+                      </td>
+                    </tr>
+                    
+                    <tr>
+                      <td style="padding: 40px 30px;">
+                        <h2 style="color: #1f2937; margin: 0 0 20px 0;">Action Required</h2>
+                        <p style="color: #4b5563; font-size: 16px; line-height: 1.6; margin: 0 0 15px 0;">Assalamu Alaikum,</p>
+                        <p style="color: #4b5563; font-size: 16px; line-height: 1.6; margin: 0 0 25px 0;">
+                          We were unable to process your recurring donation payment of <strong>$${(
+                            invoice.amount_due / 100
+                          ).toFixed(2)}</strong>.
+                        </p>
+                        <p style="color: #4b5563; font-size: 16px; line-height: 1.6; margin: 0 0 25px 0;">
+                          This usually happens when a card expires or has insufficient funds. Please update your payment method to continue your recurring donation.
+                        </p>
+                        
+                        <table width="100%" cellpadding="0" cellspacing="0">
+                          <tr>
+                            <td align="center" style="padding: 20px 0;">
+                              <a href="${portalSession.url}" 
+                                 style="display: inline-block; 
+                                        background-color: #1e3a8a; 
+                                        color: #ffffff; 
+                                        text-decoration: none; 
+                                        padding: 16px 40px; 
+                                        border-radius: 8px; 
+                                        font-size: 18px; 
+                                        font-weight: bold;">
+                                Update Payment Method
+                              </a>
+                            </td>
+                          </tr>
+                        </table>
+                        
+                        <p style="color: #4b5563; font-size: 14px; line-height: 1.6; margin: 25px 0 0 0;">
+                          If you have any questions or need assistance, please don't hesitate to contact us.
+                        </p>
+                        <p style="color: #4b5563; font-size: 16px; line-height: 1.6; margin: 15px 0 0 0;">JazakAllah Khair for your continued support!</p>
+                      </td>
+                    </tr>
+                    
+                    <tr>
+                      <td style="background-color: #f9fafb; padding: 20px; text-align: center;">
+                        <p style="color: #6b7280; font-size: 12px; margin: 0 0 5px 0;">Al Ansar</p>
+                        <p style="color: #6b7280; font-size: 12px; margin: 0;">Secure portal powered by Stripe</p>
+                      </td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+            </table>
+          </body>
+        </html>
+      `,
+    });
+
+    logger.info("✅ Payment failure email sent", {
+      email: customerEmail,
+      invoiceId: invoice.id,
+    });
+
+    // Update Firestore subscription status
+    const subscriptionQuery = await admin
+      .firestore()
+      .collection("recurringDonations")
+      .where("stripe_subscription_id", "==", invoice.subscription)
+      .limit(1)
+      .get();
+
+    if (!subscriptionQuery.empty) {
+      await subscriptionQuery.docs[0].ref.update({
+        status: "past_due",
+        last_payment_error: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      logger.info("📝 Updated subscription status to past_due");
+    }
+  } catch (error: any) {
+    logger.error("❌ Error handling payment failure", error);
+  }
 }
 
 // ============================================================================
