@@ -12,6 +12,7 @@ export {
 export { handleStripeWebhook } from "./webhooks";
 export * from "./subscriptionManagement";
 export * from "./getDonations";
+export { getDonationAnalytics } from "./getDonationAnalytics";
 
 // Runs every day at midnight Sydney time
 export const updatePrayerTimes = onSchedule(
