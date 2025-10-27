@@ -1,6 +1,10 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+  
+   match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+   }
     
     // ========================================================================
     // PRAYER TIMES & EXISTING RULES
@@ -11,7 +15,6 @@ service cloud.firestore {
       allow read: if true;
       allow write: if request.auth != null;
     }
-
      match /jumuahTimes/{document=**} {
       allow read: if true;
       allow write: if request.auth != null;
@@ -67,6 +70,16 @@ service cloud.firestore {
     match /receiptCounter/{document} {
       allow read: if request.auth != null;
       allow write: if false;
+    }
+    
+    // ========================================================================
+    // NOTIFICATION LOGS
+    // ========================================================================
+    
+    // Notification logs - admin read/delete, Cloud Functions only create/update
+    match /notificationLogs/{logId} {
+      allow read, delete: if request.auth != null;
+      allow create, update: if false; // Only Cloud Functions should create/update
     }
   }
 }
