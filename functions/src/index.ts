@@ -14,6 +14,7 @@ export * from "./subscriptionManagement";
 export * from "./getDonations";
 export { getDonationAnalytics } from "./getDonationAnalytics";
 export { onEventCreated } from "./notifications/onEventCreated";
+export { onEventUpdated } from "./notifications/onEventUpdated";
 export { onCampaignCreated } from "./notifications/onCampaignCreated";
 export { onIqamahChanged } from "./notifications/onIqamahChanged";
 export { sendCustomNotification } from "./notifications/sendCustomNotification";
