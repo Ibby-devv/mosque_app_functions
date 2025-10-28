@@ -17,6 +17,7 @@ export { onEventCreated } from "./notifications/onEventCreated";
 export { onCampaignCreated } from "./notifications/onCampaignCreated";
 export { onIqamahChanged } from "./notifications/onIqamahChanged";
 export { sendCustomNotification } from "./notifications/sendCustomNotification";
+export { geocodeAddress } from './geocoding';
 
 // Runs every day at midnight Sydney time
 export const updatePrayerTimes = onSchedule(
