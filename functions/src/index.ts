@@ -22,8 +22,10 @@ export { geocodeAddress } from './geocoding';
 export { 
   setUserRole, 
   listAdmins, 
-  removeAdmin 
+  removeAdmin,
+  createUserAccount
 } from './adminManagement';
+export { setSuperAdminProtection } from './setSuperAdmin';
 
 // Runs every day at midnight Sydney time
 export const updatePrayerTimes = onSchedule(
