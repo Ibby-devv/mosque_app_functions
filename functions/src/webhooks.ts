@@ -491,7 +491,7 @@ async function handleInvoicePaymentFailed(invoice: Stripe.Invoice) {
     // Create portal session for payment update
     const portalSession = await stripe.billingPortal.sessions.create({
       customer: invoice.customer as string,
-      return_url: "almadina://donations",
+      return_url: "alansar://donations",
     });
 
     // Send failure notification email

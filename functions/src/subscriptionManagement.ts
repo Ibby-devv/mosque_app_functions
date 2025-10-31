@@ -60,7 +60,7 @@ export const requestManagementLink = onCall(
 
       const portalSession = await stripe.billingPortal.sessions.create({
         customer: customerId,
-        return_url: "almadina://donations",
+        return_url: "alansar://donations",
       });
 
       const portalUrl = portalSession.url;
@@ -208,7 +208,7 @@ export const verifyManagementToken = onCall(
       // Create Stripe Customer Portal session
       const session = await stripe.billingPortal.sessions.create({
         customer: tokenData.customerId,
-        return_url: "almadina://donations",
+        return_url: "alansar://donations",
       });
 
       logger.info("✅ Portal session created", {
