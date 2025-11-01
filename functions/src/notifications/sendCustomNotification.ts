@@ -121,7 +121,7 @@ export const sendCustomNotification = onCall(
 
       // Log the notification to Firestore for tracking
       await admin.firestore().collection("notificationLogs").add({
-        type: "custom",
+        type: notificationData.type,
         title,
         body,
         data: notificationData,
