@@ -84,7 +84,7 @@ export const onIqamahChanged = onDocumentUpdated(
           body: changesStr,
         },
         data: {
-          type: "prayer_time_change",
+          type: "prayer",
           changes: JSON.stringify(changes),
         },
         tokens: tokens,
