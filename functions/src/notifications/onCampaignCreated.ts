@@ -68,6 +68,7 @@ export const onCampaignCreated = onDocumentCreated(
           body: `${campaignData.title}${goalStr}`,
           campaignTitle: campaignData.title || "",
           goalAmount: goalAmount?.toString() || "0",
+          imageUrl: campaignData.image_url || "",
         },
         tokens: tokens,
       };

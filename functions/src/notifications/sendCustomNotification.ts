@@ -10,6 +10,7 @@ import * as admin from "firebase-admin";
 interface SendCustomNotificationRequest {
   title: string;
   body: string;
+  image_url?: string;
   data?: {
     type?: string;
     link?: string;
@@ -35,7 +36,7 @@ export const sendCustomNotification = onCall(
     // For now, any authenticated user can send
     // In production, add: if (!request.auth.token.admin) { throw error }
 
-    const { title, body, data } = request.data as SendCustomNotificationRequest;
+    const { title, body, image_url, data } = request.data as SendCustomNotificationRequest;
 
     // Validate inputs
     if (!title || !body) {
@@ -105,6 +106,7 @@ export const sendCustomNotification = onCall(
         type: data?.type || "general",
         title,
         body,
+        imageUrl: image_url || "",
         link: data?.link || "",
         sentBy: request.auth.uid,
         sentAt: new Date().toISOString(),

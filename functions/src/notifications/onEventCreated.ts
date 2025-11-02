@@ -66,6 +66,7 @@ export const onEventCreated = onDocumentCreated(
           body: `${eventData.title}${dateStr}`,
           eventTitle: eventData.title || "",
           date: eventDate,
+          imageUrl: eventData.image_url || "",
         },
         tokens: tokens,
       };
