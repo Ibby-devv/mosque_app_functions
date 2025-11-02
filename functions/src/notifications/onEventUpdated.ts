@@ -157,6 +157,7 @@ export const onEventUpdated = onDocumentUpdated(
           eventTitle: after.title || "",
           date: eventDate,
           changes: JSON.stringify(changes),
+          imageUrl: after.image_url || "",
         },
         tokens: tokens,
       };

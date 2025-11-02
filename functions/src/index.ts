@@ -18,6 +18,8 @@ export { onEventUpdated } from "./notifications/onEventUpdated";
 export { onCampaignCreated } from "./notifications/onCampaignCreated";
 export { onIqamahChanged } from "./notifications/onIqamahChanged";
 export { sendCustomNotification } from "./notifications/sendCustomNotification";
+export { onEventDeleted } from "./cleanup/onEventDeleted";
+export { onCampaignDeleted } from "./cleanup/onCampaignDeleted";
 export { geocodeAddress } from './geocoding';
 export { 
   setUserRole, 
