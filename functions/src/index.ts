@@ -20,6 +20,7 @@ export { onIqamahChanged } from "./notifications/onIqamahChanged";
 export { sendCustomNotification } from "./notifications/sendCustomNotification";
 export { onEventDeleted } from "./cleanup/onEventDeleted";
 export { onCampaignDeleted } from "./cleanup/onCampaignDeleted";
+export { onNotificationLogDeleted } from "./cleanup/onNotificationLogDeleted";
 export { geocodeAddress } from './geocoding';
 export { 
   setUserRole, 
