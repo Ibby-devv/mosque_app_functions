@@ -58,15 +58,15 @@ export const onCampaignCreated = onDocumentCreated(
         : "";
 
       // Send notification to all tokens
+      // NOTE: Sending data-only message (no notification field) so the app
+      // can handle display with custom styling based on type
       const message = {
-        notification: {
-          title: "💚 New Donation Campaign",
-          body: `${campaignData.title}${goalStr}`,
-        },
         data: {
           type: "campaign",
           campaignId: event.params.campaignId,
-          title: campaignData.title || "",
+          title: "💚 New Donation Campaign",
+          body: `${campaignData.title}${goalStr}`,
+          campaignTitle: campaignData.title || "",
           goalAmount: goalAmount?.toString() || "0",
         },
         tokens: tokens,

@@ -78,13 +78,13 @@ export const onIqamahChanged = onDocumentUpdated(
       const changesStr = changes.join(", ");
 
       // Send notification to all tokens
+      // NOTE: Sending data-only message (no notification field) so the app
+      // can handle display with custom styling based on type
       const message = {
-        notification: {
-          title: "📿 Prayer Time Update",
-          body: changesStr,
-        },
         data: {
           type: "prayer",
+          title: "📿 Prayer Time Update",
+          body: changesStr,
           changes: JSON.stringify(changes),
         },
         tokens: tokens,

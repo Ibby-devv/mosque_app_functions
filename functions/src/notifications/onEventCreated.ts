@@ -56,15 +56,15 @@ export const onEventCreated = onDocumentCreated(
       const dateStr = eventDate ? ` - ${eventDate}` : "";
 
       // Send notification to all tokens
+      // NOTE: Sending data-only message (no notification field) so the app
+      // can handle display with custom styling based on type
       const message = {
-        notification: {
-          title: "🕌 New Event",
-          body: `${eventData.title}${dateStr}`,
-        },
         data: {
           type: "event",
           eventId: event.params.eventId,
-          title: eventData.title || "",
+          title: "🕌 New Event",
+          body: `${eventData.title}${dateStr}`,
+          eventTitle: eventData.title || "",
           date: eventDate,
         },
         tokens: tokens,

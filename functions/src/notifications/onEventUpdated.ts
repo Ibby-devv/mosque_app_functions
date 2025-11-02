@@ -146,15 +146,15 @@ export const onEventUpdated = onDocumentUpdated(
       }
 
       // Send notification to all tokens
+      // NOTE: Sending data-only message (no notification field) so the app
+      // can handle display with custom styling based on type
       const message = {
-        notification: {
+        data: {
+          type: "event",
+          eventId: event.params.eventId,
           title: "📝 Event Updated",
           body: notificationBody,
-        },
-        data: {
-          type: "event_updated",
-          eventId: event.params.eventId,
-          title: after.title || "",
+          eventTitle: after.title || "",
           date: eventDate,
           changes: JSON.stringify(changes),
         },

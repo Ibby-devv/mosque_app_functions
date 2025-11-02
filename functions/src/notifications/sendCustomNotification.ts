@@ -99,8 +99,12 @@ export const sendCustomNotification = onCall(
       }
 
       // Prepare notification data
+      // NOTE: Sending data-only message (no notification field) so the app
+      // can handle display with custom styling based on type
       const notificationData = {
-        type: data?.type || "announcement",
+        type: data?.type || "general",
+        title,
+        body,
         link: data?.link || "",
         sentBy: request.auth.uid,
         sentAt: new Date().toISOString(),
@@ -109,10 +113,6 @@ export const sendCustomNotification = onCall(
 
       // Send notification to all tokens
       const message = {
-        notification: {
-          title,
-          body,
-        },
         data: notificationData,
         tokens: tokens,
       };
