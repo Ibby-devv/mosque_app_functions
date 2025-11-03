@@ -66,27 +66,27 @@ export const sendCustomNotification = onCall(
         sentBy: request.auth.uid,
       });
 
-      // Get all users with notifications enabled
-      const usersSnapshot = await admin.firestore()
-        .collection("users")
+      // Get all devices with notifications enabled
+      const tokensSnapshot = await admin.firestore()
+        .collection("fcmTokens")
         .where("notificationsEnabled", "==", true)
         .get();
 
-      if (usersSnapshot.empty) {
-        logger.info("No users with notifications enabled");
+      if (tokensSnapshot.empty) {
+        logger.info("No devices with notifications enabled");
         return {
           success: true,
-          message: "No users to notify",
+          message: "No devices to notify",
           sentCount: 0,
         };
       }
 
       // Collect FCM tokens
       const tokens: string[] = [];
-      usersSnapshot.forEach((doc) => {
-        const userData = doc.data();
-        if (userData.fcmToken) {
-          tokens.push(userData.fcmToken);
+      tokensSnapshot.forEach((doc) => {
+        const tokenData = doc.data();
+        if (tokenData.fcmToken) {
+          tokens.push(tokenData.fcmToken);
         }
       });
 
