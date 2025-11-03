@@ -74,6 +74,10 @@
           "order": "ASCENDING"
         },
         {
+          "fieldPath": "time",
+          "order": "ASCENDING"
+        },
+        {
           "fieldPath": "__name__",
           "order": "ASCENDING"
         }
