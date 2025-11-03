@@ -21,6 +21,7 @@ export { sendCustomNotification } from "./notifications/sendCustomNotification";
 export { onEventDeleted } from "./cleanup/onEventDeleted";
 export { onCampaignDeleted } from "./cleanup/onCampaignDeleted";
 export { onNotificationLogDeleted } from "./cleanup/onNotificationLogDeleted";
+export { cleanupStaleTokens } from "./cleanup/cleanupStaleTokens";
 export { geocodeAddress } from './geocoding';
 export { 
   setUserRole, 
