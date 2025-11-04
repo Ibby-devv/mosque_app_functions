@@ -6,6 +6,8 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { logger } from "firebase-functions";
 import * as admin from "firebase-admin";
+import { getActiveTokens, cleanupInvalidTokens } from "../utils/tokenCleanup";
+import { buildDataOnlyMessage } from "../utils/messagingHelpers";
 
 interface SendCustomNotificationRequest {
   title: string;
@@ -66,35 +68,15 @@ export const sendCustomNotification = onCall(
         sentBy: request.auth.uid,
       });
 
-      // Get all devices with notifications enabled
-      const tokensSnapshot = await admin.firestore()
-        .collection("fcmTokens")
-        .where("notificationsEnabled", "==", true)
-        .get();
+      // Get all active devices with notifications enabled
+      // Only include tokens seen in the last 90 days
+      const { tokens, deviceIds } = await getActiveTokens(90);
 
-      if (tokensSnapshot.empty) {
-        logger.info("No devices with notifications enabled");
+      if (tokens.length === 0) {
+        logger.info("No active devices with notifications enabled");
         return {
           success: true,
           message: "No devices to notify",
-          sentCount: 0,
-        };
-      }
-
-      // Collect FCM tokens
-      const tokens: string[] = [];
-      tokensSnapshot.forEach((doc) => {
-        const tokenData = doc.data();
-        if (tokenData.fcmToken) {
-          tokens.push(tokenData.fcmToken);
-        }
-      });
-
-      if (tokens.length === 0) {
-        logger.info("No FCM tokens found");
-        return {
-          success: true,
-          message: "No valid tokens to send to",
           sentCount: 0,
         };
       }
@@ -113,13 +95,13 @@ export const sendCustomNotification = onCall(
         ...data,
       };
 
-      // Send notification to all tokens
-      const message = {
-        data: notificationData,
-        tokens: tokens,
-      };
+      // Send notification to all tokens with proper priority for background delivery
+      const message = buildDataOnlyMessage(notificationData, tokens);
 
       const response = await admin.messaging().sendEachForMulticast(message);
+
+      // Clean up invalid tokens
+      await cleanupInvalidTokens(tokens, response.responses, deviceIds);
 
       // Log the notification to Firestore for tracking
       await admin.firestore().collection("notificationLogs").add({
@@ -139,18 +121,6 @@ export const sendCustomNotification = onCall(
         failureCount: response.failureCount,
         totalTokens: tokens.length,
       });
-
-      // Log failures
-      if (response.failureCount > 0) {
-        response.responses.forEach((resp, idx) => {
-          if (!resp.success) {
-            logger.warn("Failed to send to token", {
-              token: tokens[idx].substring(0, 20) + "...",
-              error: resp.error?.message,
-            });
-          }
-        });
-      }
 
       return {
         success: true,

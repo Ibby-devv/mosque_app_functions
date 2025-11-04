@@ -6,6 +6,8 @@
 import { onDocumentUpdated } from "firebase-functions/v2/firestore";
 import { logger } from "firebase-functions";
 import * as admin from "firebase-admin";
+import { getActiveTokens, cleanupInvalidTokens } from "../utils/tokenCleanup";
+import { buildDataOnlyMessage } from "../utils/messagingHelpers";
 
 export const onEventUpdated = onDocumentUpdated(
   {
@@ -120,49 +122,34 @@ export const onEventUpdated = onDocumentUpdated(
 
       logger.info("📣 Significant event changes detected:", { changes, notificationBody });
 
-      // Get all devices with notifications enabled
-      const tokensSnapshot = await admin.firestore()
-        .collection("fcmTokens")
-        .where("notificationsEnabled", "==", true)
-        .get();
-
-      if (tokensSnapshot.empty) {
-        logger.info("No devices with notifications enabled");
-        return;
-      }
-
-      // Collect FCM tokens
-      const tokens: string[] = [];
-      tokensSnapshot.forEach((doc) => {
-        const tokenData = doc.data();
-        if (tokenData.fcmToken) {
-          tokens.push(tokenData.fcmToken);
-        }
-      });
+      // Get all active devices with notifications enabled
+      const { tokens, deviceIds } = await getActiveTokens(90);
 
       if (tokens.length === 0) {
-        logger.info("No FCM tokens found");
+        logger.info("No active devices with notifications enabled");
         return;
       }
 
       // Send notification to all tokens
       // NOTE: Sending data-only message (no notification field) so the app
       // can handle display with custom styling based on type
-      const message = {
-        data: {
-          type: "event",
-          eventId: event.params.eventId,
-          title: "📝 Event Updated",
-          body: notificationBody,
-          eventTitle: after.title || "",
-          date: eventDate,
-          changes: JSON.stringify(changes),
-          imageUrl: after.image_url || "",
-        },
-        tokens: tokens,
+      const messageData = {
+        type: "event",
+        eventId: event.params.eventId,
+        title: "📝 Event Updated",
+        body: notificationBody,
+        eventTitle: after.title || "",
+        date: eventDate,
+        changes: JSON.stringify(changes),
+        imageUrl: after.image_url || "",
       };
 
+      const message = buildDataOnlyMessage(messageData, tokens);
+
       const response = await admin.messaging().sendEachForMulticast(message);
+
+      // Clean up invalid tokens
+      await cleanupInvalidTokens(tokens, response.responses, deviceIds);
 
       logger.info("✅ Event update notifications sent", {
         successCount: response.successCount,
@@ -170,18 +157,6 @@ export const onEventUpdated = onDocumentUpdated(
         totalTokens: tokens.length,
         changes: changes,
       });
-
-      // Log failures
-      if (response.failureCount > 0) {
-        response.responses.forEach((resp, idx) => {
-          if (!resp.success) {
-            logger.warn("Failed to send to token", {
-              token: tokens[idx].substring(0, 20) + "...",
-              error: resp.error?.message,
-            });
-          }
-        });
-      }
 
     } catch (error: any) {
       logger.error("❌ Error sending event update notifications:", error);

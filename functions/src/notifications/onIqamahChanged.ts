@@ -6,6 +6,8 @@
 import { onDocumentUpdated } from "firebase-functions/v2/firestore";
 import { logger } from "firebase-functions";
 import * as admin from "firebase-admin";
+import { getActiveTokens, cleanupInvalidTokens } from "../utils/tokenCleanup";
+import { buildDataOnlyMessage } from "../utils/messagingHelpers";
 
 export const onIqamahChanged = onDocumentUpdated(
   {
@@ -49,28 +51,11 @@ export const onIqamahChanged = onDocumentUpdated(
 
       logger.info("📿 Iqamah times changed:", { changes });
 
-      // Get all devices with notifications enabled
-      const tokensSnapshot = await admin.firestore()
-        .collection("fcmTokens")
-        .where("notificationsEnabled", "==", true)
-        .get();
-
-      if (tokensSnapshot.empty) {
-        logger.info("No devices with notifications enabled");
-        return;
-      }
-
-      // Collect FCM tokens
-      const tokens: string[] = [];
-      tokensSnapshot.forEach((doc) => {
-        const tokenData = doc.data();
-        if (tokenData.fcmToken) {
-          tokens.push(tokenData.fcmToken);
-        }
-      });
+      // Get all active devices with notifications enabled
+      const { tokens, deviceIds } = await getActiveTokens(90);
 
       if (tokens.length === 0) {
-        logger.info("No FCM tokens found");
+        logger.info("No active devices with notifications enabled");
         return;
       }
 
@@ -80,17 +65,19 @@ export const onIqamahChanged = onDocumentUpdated(
       // Send notification to all tokens
       // NOTE: Sending data-only message (no notification field) so the app
       // can handle display with custom styling based on type
-      const message = {
-        data: {
-          type: "prayer",
-          title: "📿 Prayer Time Update",
-          body: changesStr,
-          changes: JSON.stringify(changes),
-        },
-        tokens: tokens,
+      const messageData = {
+        type: "prayer",
+        title: "📿 Prayer Time Update",
+        body: changesStr,
+        changes: JSON.stringify(changes),
       };
 
+      const message = buildDataOnlyMessage(messageData, tokens);
+
       const response = await admin.messaging().sendEachForMulticast(message);
+
+      // Clean up invalid tokens
+      await cleanupInvalidTokens(tokens, response.responses, deviceIds);
 
       logger.info("✅ Iqamah change notifications sent", {
         successCount: response.successCount,
@@ -98,18 +85,6 @@ export const onIqamahChanged = onDocumentUpdated(
         totalTokens: tokens.length,
         changes: changes,
       });
-
-      // Log failures
-      if (response.failureCount > 0) {
-        response.responses.forEach((resp, idx) => {
-          if (!resp.success) {
-            logger.warn("Failed to send to token", {
-              token: tokens[idx].substring(0, 20) + "...",
-              error: resp.error?.message,
-            });
-          }
-        });
-      }
 
     } catch (error: any) {
       logger.error("❌ Error sending iqamah change notifications:", error);
