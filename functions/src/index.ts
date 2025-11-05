@@ -30,6 +30,12 @@ export {
   createUserAccount
 } from './adminManagement';
 export { setSuperAdminProtection } from './setSuperAdmin';
+export { 
+  registerFcmToken, 
+  setNotificationPreference, 
+  getNotificationPreference, 
+  touchLastSeen 
+} from './tokens';
 
 // Runs every day at midnight Sydney time
 export const updatePrayerTimes = onSchedule(
