@@ -95,8 +95,17 @@ export const sendCustomNotification = onCall(
         ...data,
       };
 
+      // FCM requires data payload values to be strings. Ensure everything is stringified
+      // to avoid payload rejection and missing fields like imageUrl on certain devices.
+      const stringData: Record<string, string> = Object.fromEntries(
+        Object.entries(notificationData).map(([key, value]) => [
+          key,
+          value === undefined || value === null ? "" : String(value),
+        ])
+      );
+
       // Send notification to all tokens with proper priority for background delivery
-      const message = buildDataOnlyMessage(notificationData, tokens);
+  const message = buildDataOnlyMessage(stringData, tokens);
 
       const response = await admin.messaging().sendEachForMulticast(message);
 
@@ -105,10 +114,10 @@ export const sendCustomNotification = onCall(
 
       // Log the notification to Firestore for tracking
       await admin.firestore().collection("notificationLogs").add({
-        type: notificationData.type,
+        type: stringData.type,
         title,
         body,
-        data: notificationData,
+        data: stringData,
         sentBy: request.auth.uid,
         sentTo: tokens.length,
         successCount: response.successCount,
