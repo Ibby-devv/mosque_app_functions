@@ -1,5 +1,9 @@
 import {onSchedule} from "firebase-functions/v2/scheduler";
+import { setGlobalOptions } from "firebase-functions/v2";
 import * as admin from "firebase-admin";
+
+// Set global region for all functions
+setGlobalOptions({ region: "australia-southeast1" });
 
 admin.initializeApp();
 
@@ -21,7 +25,14 @@ export { sendCustomNotification } from "./notifications/sendCustomNotification";
 export { onEventDeleted } from "./cleanup/onEventDeleted";
 export { onCampaignDeleted } from "./cleanup/onCampaignDeleted";
 export { onNotificationLogDeleted } from "./cleanup/onNotificationLogDeleted";
+export { onNotificationLogCreated } from "./cleanup/onNotificationLogCreated";
+export { onNotificationLogUpdated } from "./cleanup/onNotificationLogUpdated";
+export { onEventCreated as onEventCreatedImageCleanup } from "./cleanup/onEventCreated";
+export { onEventUpdated as onEventUpdatedImageCleanup } from "./cleanup/onEventUpdated";
+export { onCampaignCreated as onCampaignCreatedImageCleanup } from "./cleanup/onCampaignCreated";
+export { onCampaignUpdated as onCampaignUpdatedImageCleanup } from "./cleanup/onCampaignUpdated";
 export { cleanupStaleTokens } from "./cleanup/cleanupStaleTokens";
+export { cleanupTmpImages } from "./cleanup/cleanupTmpImages";
 export { geocodeAddress } from './geocoding';
 export { 
   setUserRole, 

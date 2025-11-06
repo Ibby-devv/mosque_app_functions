@@ -5,7 +5,7 @@
 
 import { onDocumentDeleted } from "firebase-functions/v2/firestore";
 import { logger } from "firebase-functions";
-import * as admin from "firebase-admin";
+import { deleteFolderContents, parseStorageRef } from "../utils/imageHelpers";
 
 export const onEventDeleted = onDocumentDeleted(
   {
@@ -22,41 +22,52 @@ export const onEventDeleted = onDocumentDeleted(
         return;
       }
 
-      logger.info("🗑️ Event deleted, cleaning up image...", {
+      logger.info("🗑️ Event deleted, checking for image cleanup...", {
         eventId,
         title: eventData.title,
-        hasImage: !!eventData.image_url,
       });
 
-      // If the event had an image, delete it from Storage
-      if (eventData.image_url) {
-        try {
-          const bucket = admin.storage().bucket();
-          const imagePath = `events/${eventId}/image.jpg`;
+      // Check if the event had an image
+      const imageUrl: string | undefined = eventData.image_url as string | undefined;
 
-          await bucket.file(imagePath).delete();
-
-          logger.info("✅ Event image deleted from Storage", {
-            eventId,
-            imagePath,
-          });
-        } catch (storageError: any) {
-          // If file doesn't exist, that's okay - it might have been manually deleted
-          if (storageError.code === 404) {
-            logger.info("⚠️ Image file not found in Storage (already deleted)", {
-              eventId,
-            });
-          } else {
-            logger.error("❌ Error deleting event image from Storage", {
-              eventId,
-              error: storageError.message,
-            });
-          }
-        }
-      } else {
+      if (!imageUrl) {
         logger.info("ℹ️ No image to delete for this event", { eventId });
+        return;
       }
 
+      // Parse the storage reference
+      const ref = parseStorageRef(imageUrl);
+      
+      if (!ref) {
+        logger.warn("Could not parse image URL", { imageUrl });
+        return;
+      }
+
+      // Only delete if it's in the events/ prefix (safety check)
+      if (!ref.path.startsWith("events/")) {
+        logger.info("ℹ️ Image not in events/ prefix, skipping cleanup", { 
+          eventId, 
+          path: ref.path 
+        });
+        return;
+      }
+
+      // If it's in the live/{eventId}/ folder, delete the entire folder
+      if (ref.path.includes(`/live/${eventId}/`)) {
+        const folderPath = `events/live/${eventId}/`;
+        const deletedCount = await deleteFolderContents(folderPath, ref.bucket);
+        
+        logger.info("✅ Event live folder deleted", {
+          eventId,
+          folderPath,
+          filesDeleted: deletedCount,
+        });
+      } else {
+        logger.info("ℹ️ Image not in expected live folder, skipping", {
+          eventId,
+          path: ref.path,
+        });
+      }
     } catch (error: any) {
       logger.error("❌ Error in event deletion cleanup:", error);
     }
