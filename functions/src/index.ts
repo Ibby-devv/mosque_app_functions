@@ -38,9 +38,14 @@ export {
   setUserRole, 
   listAdmins, 
   removeAdmin,
-  createUserAccount
+  createUserAccount,
+  setUserRoles,
+  listUsers,
+  removeUserRoles
 } from './adminManagement';
 export { setSuperAdminProtection } from './setSuperAdmin';
+export { updateUserProfile } from './updateUserProfile';
+export { deleteUser } from './deleteUser';
 export { 
   registerFcmToken, 
   setNotificationPreference, 
