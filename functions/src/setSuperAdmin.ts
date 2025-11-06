@@ -1,10 +1,18 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { logger } from 'firebase-functions/v2';
 import * as admin from 'firebase-admin';
+import {
+  RoleId,
+  Permission,
+  isSuperAdmin,
+  createCustomClaims,
+  migrateLegacyAdmin,
+} from './utils/roles';
 
 /**
- * ONE-TIME FUNCTION: Set superAdmin protection on a specific user
- * This should only be called once to protect your first admin account
+ * Set Super Admin protection on a specific user
+ * Adds SUPER_ADMIN role which includes all permissions and cannot be removed
+ * Only existing Super Admins can call this function
  */
 export const setSuperAdminProtection = onCall(
   { 
@@ -12,11 +20,20 @@ export const setSuperAdminProtection = onCall(
     cors: true
   },
   async (request) => {
-    // Verify caller is an admin
-    if (!request.auth?.token.admin) {
+    // Verify caller is authenticated
+    if (!request.auth) {
+      throw new HttpsError(
+        'unauthenticated',
+        'Must be logged in to perform this action'
+      );
+    }
+
+    // Verify caller has MANAGE_SUPER_ADMINS permission (only Super Admins have this)
+    const callerPermissions = (request.auth.token.permissions as Permission[]) || [];
+    if (!callerPermissions.includes(Permission.MANAGE_SUPER_ADMINS)) {
       throw new HttpsError(
         'permission-denied',
-        'Admin access required'
+        'Only Super Admins can grant Super Admin protection'
       );
     }
 
@@ -32,50 +49,56 @@ export const setSuperAdminProtection = onCall(
     try {
       const user = await admin.auth().getUser(uid);
 
-      logger.info(`Setting superAdmin protection for: ${user.email}`);
+      logger.info(`Setting Super Admin protection for: ${user.email}`);
       logger.info(`Current claims: ${JSON.stringify(user.customClaims)}`);
 
-      // Check if already a super admin
-      if (user.customClaims?.superAdmin === true) {
+      // Get current roles (migrate if using legacy system)
+      const currentRoles = (user.customClaims?.roles as RoleId[]) || migrateLegacyAdmin(user.customClaims || {});
+
+      // Check if already a Super Admin
+      if (isSuperAdmin(currentRoles)) {
         return {
           success: true,
-          message: `${user.email} already has super admin protection`,
+          message: `${user.email} already has Super Admin protection`,
           alreadyProtected: true,
         };
       }
 
-      // Add superAdmin flag to existing claims
-      const newClaims = {
-        ...user.customClaims,
-        superAdmin: true,
-        admin: true,
-        role: 'super admin',
+      // Add SUPER_ADMIN role (replaces all other roles since Super Admin includes everything)
+      const newRoles = [RoleId.SUPER_ADMIN];
+      const customClaims = createCustomClaims(newRoles);
+
+      const claimsWithMeta = {
+        ...customClaims,
         updatedBy: request.auth.uid,
         updatedAt: new Date().toISOString(),
       };
 
-      await admin.auth().setCustomUserClaims(uid, newClaims);
+      await admin.auth().setCustomUserClaims(uid, claimsWithMeta);
 
       // Log the action
       await admin.firestore().collection('adminLogs').add({
         action: 'super_admin_protection_added',
         targetUser: uid,
         targetEmail: user.email || 'unknown',
+        previousRoles: currentRoles,
+        newRoles: newRoles,
         performedBy: request.auth.uid,
         performedByEmail: request.auth.token.email || 'unknown',
         timestamp: admin.firestore.FieldValue.serverTimestamp(),
       });
 
-      logger.info(`Super admin protection activated for: ${user.email}`);
-      logger.info(`New claims: ${JSON.stringify(newClaims)}`);
+      logger.info(`Super Admin protection activated for: ${user.email}`);
+      logger.info(`New claims: ${JSON.stringify(claimsWithMeta)}`);
 
       return {
         success: true,
-        message: `Super admin protection activated for ${user.email}. This account can no longer be deleted.`,
-        claims: newClaims,
+        message: `Super Admin protection activated for ${user.email}. This account now has full system access and cannot be deleted.`,
+        roles: newRoles,
+        permissions: customClaims.permissions,
       };
     } catch (error: any) {
-      logger.error('Error setting super admin protection:', error);
+      logger.error('Error setting Super Admin protection:', error);
       throw new HttpsError('internal', error.message);
     }
   }
