@@ -44,7 +44,6 @@ export {
   removeUserRoles
 } from './adminManagement';
 export { setSuperAdminProtection } from './setSuperAdmin';
-export { migrateMyAccountToNewSystem } from './migrateAdminToNewSystem';
 export { updateUserProfile } from './updateUserProfile';
 export { deleteUser } from './deleteUser';
 export { 
