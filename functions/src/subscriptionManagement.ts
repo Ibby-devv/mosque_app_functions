@@ -75,7 +75,7 @@ export const requestManagementLink = onCall(
         const resend = new Resend(process.env.RESEND_API_KEY);
         
         await resend.emails.send({
-          from: 'Al Ansar <onboarding@resend.dev>',
+          from: 'Al Ansar <no-reply@alansar.app>',
           to: normalizedEmail,
           subject: 'Manage Your Recurring Donation',
           html: `
