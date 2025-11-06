@@ -5,7 +5,7 @@
 
 import { onDocumentDeleted } from "firebase-functions/v2/firestore";
 import { logger } from "firebase-functions";
-import * as admin from "firebase-admin";
+import { deleteFolderContents, parseStorageRef } from "../utils/imageHelpers";
 
 export const onNotificationLogDeleted = onDocumentDeleted(
   {
@@ -28,41 +28,47 @@ export const onNotificationLogDeleted = onDocumentDeleted(
       });
 
       // Check if the notification had an image
-      const imageUrl = logData.data?.imageUrl || logData.imageUrl;
+      const imageUrl: string | undefined =
+        (logData.data?.imageUrl as string | undefined) ?? (logData.imageUrl as string | undefined);
 
-      if (imageUrl && typeof imageUrl === 'string' && (imageUrl.includes('notifications/') || imageUrl.includes('notifications%2F'))) {
-        try {
-          // Extract the storage path from the URL
-          // URL format: https://firebasestorage.googleapis.com/v0/b/{bucket}/o/{path}?{params}
-          const urlParts = imageUrl.split('/o/')[1];
-          if (urlParts) {
-            const storagePath = decodeURIComponent(urlParts.split('?')[0]);
-
-            const bucket = admin.storage().bucket();
-            await bucket.file(storagePath).delete();
-
-            logger.info("✅ Notification image deleted from Storage", {
-              logId,
-              storagePath,
-            });
-          }
-        } catch (storageError: any) {
-          // If file doesn't exist, that's okay - it might have been manually deleted
-          if (storageError.code === 404) {
-            logger.info("⚠️ Image file not found in Storage (already deleted)", {
-              logId,
-            });
-          } else {
-            logger.error("❌ Error deleting notification image from Storage", {
-              logId,
-              error: storageError.message,
-            });
-          }
-        }
-      } else {
+      if (!imageUrl) {
         logger.info("ℹ️ No image to delete for this notification", { logId });
+        return;
       }
 
+      // Parse the storage reference
+      const ref = parseStorageRef(imageUrl);
+      
+      if (!ref) {
+        logger.warn("Could not parse image URL", { imageUrl });
+        return;
+      }
+
+      // Only delete if it's in the notifications/ prefix (safety check)
+      if (!ref.path.startsWith("notifications/")) {
+        logger.info("ℹ️ Image not in notifications/ prefix, skipping cleanup", { 
+          logId, 
+          path: ref.path 
+        });
+        return;
+      }
+
+      // If it's in the live/{logId}/ folder, delete the entire folder
+      if (ref.path.includes(`/live/${logId}/`)) {
+        const folderPath = `notifications/live/${logId}/`;
+        const deletedCount = await deleteFolderContents(folderPath, ref.bucket);
+        
+        logger.info("✅ Notification live folder deleted", {
+          logId,
+          folderPath,
+          filesDeleted: deletedCount,
+        });
+      } else {
+        logger.info("ℹ️ Image not in expected live folder, skipping", {
+          logId,
+          path: ref.path,
+        });
+      }
     } catch (error: any) {
       logger.error("❌ Error in notification log deletion cleanup:", error);
     }

@@ -1,64 +1,45 @@
-// ============================================================================
-// CLOUD FUNCTION: Delete Campaign Image on Campaign Deletion
-// Location: functions/src/cleanup/onCampaignDeleted.ts
-// ============================================================================
+/**
+ * onCampaignDeleted
+ * 
+ * Triggered when a campaign document is deleted.
+ * Cleans up all images in campaigns/live/{campaignId}/
+ */
 
-import { onDocumentDeleted } from "firebase-functions/v2/firestore";
-import { logger } from "firebase-functions";
-import * as admin from "firebase-admin";
+import { onDocumentDeleted } from 'firebase-functions/v2/firestore';
+import * as logger from 'firebase-functions/logger';
+import { parseStorageRef, deleteFolderContents } from '../utils/imageHelpers';
 
 export const onCampaignDeleted = onDocumentDeleted(
-  {
-    document: "campaigns/{campaignId}",
-    region: "australia-southeast1",
-  },
+  'campaigns/{campaignId}',
   async (event) => {
+    const campaignId = event.params.campaignId;
+    const data = event.data?.data();
+
+    logger.info(`Campaign ${campaignId}: Cleaning up images...`);
+
     try {
-      const campaignData = event.data?.data();
-      const campaignId = event.params.campaignId;
+      const imageUrl = data?.image_url;
 
-      if (!campaignData) {
-        logger.warn("No campaign data found for deletion");
-        return;
-      }
+      if (imageUrl) {
+        // Parse the URL to get bucket and path
+        const parsed = parseStorageRef(imageUrl);
 
-      logger.info("🗑️ Campaign deleted, cleaning up image...", {
-        campaignId,
-        title: campaignData.title,
-        hasImage: !!campaignData.image_url,
-      });
+        // Delete entire live folder for this campaign
+        const folderPath = `campaigns/live/${campaignId}/`;
+        await deleteFolderContents(folderPath, parsed?.bucket);
 
-      // If the campaign had an image, delete it from Storage
-      if (campaignData.image_url) {
-        try {
-          const bucket = admin.storage().bucket();
-          const imagePath = `campaigns/${campaignId}/image.jpg`;
-
-          await bucket.file(imagePath).delete();
-
-          logger.info("✅ Campaign image deleted from Storage", {
-            campaignId,
-            imagePath,
-          });
-        } catch (storageError: any) {
-          // If file doesn't exist, that's okay - it might have been manually deleted
-          if (storageError.code === 404) {
-            logger.info("⚠️ Image file not found in Storage (already deleted)", {
-              campaignId,
-            });
-          } else {
-            logger.error("❌ Error deleting campaign image from Storage", {
-              campaignId,
-              error: storageError.message,
-            });
-          }
-        }
+        logger.info(`Campaign ${campaignId}: Images cleaned up successfully`, {
+          folder: folderPath,
+        });
       } else {
-        logger.info("ℹ️ No image to delete for this campaign", { campaignId });
+        logger.info(`Campaign ${campaignId}: No images to clean up`);
       }
-
-    } catch (error: any) {
-      logger.error("❌ Error in campaign deletion cleanup:", error);
+    } catch (error) {
+      logger.error(`Campaign ${campaignId}: Error cleaning up images`, {
+        error,
+        imageUrl: data?.image_url,
+      });
+      // Don't throw - deletion should succeed even if cleanup fails
     }
   }
 );
