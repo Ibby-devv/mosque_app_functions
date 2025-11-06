@@ -8,6 +8,7 @@ import { logger } from "firebase-functions";
 import * as admin from "firebase-admin";
 import { getActiveTokens, cleanupInvalidTokens } from "../utils/tokenCleanup";
 import { buildDataOnlyMessage } from "../utils/messagingHelpers";
+import { isTmpUrl, moveToLive } from "../utils/imageHelpers";
 
 interface SendCustomNotificationRequest {
   title: string;
@@ -66,6 +67,7 @@ export const sendCustomNotification = onCall(
       logger.info("📢 Sending custom notification...", {
         title,
         sentBy: request.auth.uid,
+        hasImage: !!image_url,
       });
 
       // Get all active devices with notifications enabled
@@ -81,6 +83,39 @@ export const sendCustomNotification = onCall(
         };
       }
 
+      // Pre-create the notification log to get an ID for finalizing the image
+      const logRef = await admin.firestore().collection("notificationLogs").add({
+        type: data?.type || "general",
+        title,
+        body,
+        imageUrl: image_url || "",
+        data: data || {},
+        sentBy: request.auth.uid,
+        sentTo: tokens.length,
+        successCount: 0,
+        failureCount: 0,
+        sentAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      const logId = logRef.id;
+      logger.info("Created notification log", { logId });
+
+      // Finalize image if it's in tmp
+      let finalImageUrl = image_url || "";
+      if (image_url && isTmpUrl(image_url)) {
+        logger.info("Finalizing tmp image before sending...", { tmpUrl: image_url });
+        const liveUrl = await moveToLive(image_url, "notifications", logId);
+        if (liveUrl) {
+          finalImageUrl = liveUrl;
+          logger.info("Image finalized to live", { liveUrl });
+
+          // Update the log with the live URL
+          await logRef.update({ imageUrl: liveUrl });
+        } else {
+          logger.warn("Failed to finalize image, using tmp URL");
+        }
+      }
+
       // Prepare notification data
       // NOTE: Sending data-only message (no notification field) so the app
       // can handle display with custom styling based on type
@@ -88,7 +123,7 @@ export const sendCustomNotification = onCall(
         type: data?.type || "general",
         title,
         body,
-        imageUrl: image_url || "",
+        imageUrl: finalImageUrl,
         link: data?.link || "",
         sentBy: request.auth.uid,
         sentAt: new Date().toISOString(),
@@ -112,23 +147,19 @@ export const sendCustomNotification = onCall(
       // Clean up invalid tokens
       await cleanupInvalidTokens(tokens, response.responses, deviceIds);
 
-      // Log the notification to Firestore for tracking
-      await admin.firestore().collection("notificationLogs").add({
-        type: stringData.type,
-        title,
-        body,
+      // Update the log with final results
+      await logRef.update({
         data: stringData,
-        sentBy: request.auth.uid,
-        sentTo: tokens.length,
         successCount: response.successCount,
         failureCount: response.failureCount,
-        sentAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
       logger.info("✅ Custom notification sent", {
+        logId,
         successCount: response.successCount,
         failureCount: response.failureCount,
         totalTokens: tokens.length,
+        imageFinalized: image_url && isTmpUrl(image_url),
       });
 
       return {
