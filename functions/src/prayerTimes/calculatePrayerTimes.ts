@@ -41,20 +41,14 @@ export async function calculateAndUpdatePrayerTimes(
     const date = new Date();
     const adhanPrayerTimes = new AdhanPrayerTimes(coordinates, date, params);
 
-    // Convert Date objects to 12-hour format strings
+    // Convert Date objects to 12-hour format strings in Sydney timezone
     const formatTime = (date: Date): string => {
-      let hours = date.getHours();
-      const minutes = date.getMinutes();
-      const period = hours >= 12 ? "PM" : "AM";
-
-      if (hours > 12) {
-        hours -= 12;
-      } else if (hours === 0) {
-        hours = 12;
-      }
-
-      const minutesStr = minutes.toString().padStart(2, "0");
-      return `${hours}:${minutesStr} ${period}`;
+      return date.toLocaleTimeString("en-US", {
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+        timeZone: "Australia/Sydney",
+      });
     };
 
     // Get current date in Sydney timezone (YYYY-MM-DD format)
