@@ -17,6 +17,7 @@ interface RegisterFcmTokenRequest {
 interface SetNotificationPreferenceRequest {
   deviceId: string;
   enabled: boolean;
+  appVersion?: string; // optional lightweight version sync
 }
 
 interface GetNotificationPreferenceRequest {
@@ -25,6 +26,7 @@ interface GetNotificationPreferenceRequest {
 
 interface TouchLastSeenRequest {
   deviceId: string;
+  appVersion?: string; // optional version bump on heartbeat
 }
 
 // ============================================================================
@@ -222,23 +224,32 @@ export const setNotificationPreference = onCall(
     region: "australia-southeast1",
   },
   async (request: CallableRequest<SetNotificationPreferenceRequest>) => {
-    const {deviceId, enabled} = request.data;
+  const {deviceId, enabled, appVersion} = request.data;
 
     try {
       const validDeviceId = validateDeviceId(deviceId);
       const validEnabled = validateBoolean(enabled, "enabled");
+      const validAppVersion = typeof appVersion === "string" && appVersion.length > 0
+        ? validateAppVersion(appVersion)
+        : null;
 
       const tokenRef = admin.firestore().collection("fcmTokens").doc(validDeviceId);
-      
-      await tokenRef.update({
+
+      const updateData: Record<string, any> = {
         notificationsEnabled: validEnabled,
         lastSeen: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+      };
+      if (validAppVersion) {
+        updateData.appVersion = validAppVersion;
+      }
+
+      await tokenRef.update(updateData);
 
       logger.info("Notification preference updated", {
         deviceId: validDeviceId,
         enabled: validEnabled,
+        appVersion: validAppVersion || undefined,
       });
 
       return {ok: true};
@@ -268,7 +279,7 @@ export const getNotificationPreference = onCall(
     region: "australia-southeast1",
   },
   async (request: CallableRequest<GetNotificationPreferenceRequest>) => {
-    const {deviceId} = request.data;
+  const {deviceId} = request.data;
 
     try {
       const validDeviceId = validateDeviceId(deviceId);
@@ -317,20 +328,30 @@ export const touchLastSeen = onCall(
     region: "australia-southeast1",
   },
   async (request: CallableRequest<TouchLastSeenRequest>) => {
-    const {deviceId} = request.data;
+    const {deviceId, appVersion} = request.data;
 
     try {
       const validDeviceId = validateDeviceId(deviceId);
+      const validAppVersion = typeof appVersion === "string" && appVersion.length > 0
+        ? validateAppVersion(appVersion)
+        : null;
 
       const tokenRef = admin.firestore().collection("fcmTokens").doc(validDeviceId);
       const doc = await tokenRef.get();
 
-      // Only update if document exists
       if (doc.exists) {
-        await tokenRef.update({
+        const updateData: Record<string, any> = {
           lastSeen: admin.firestore.FieldValue.serverTimestamp(),
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
+        };
+        if (validAppVersion) {
+          const currentVersion = doc.data()?.appVersion;
+            // Only write if different to minimize writes
+          if (currentVersion !== validAppVersion) {
+            updateData.appVersion = validAppVersion;
+          }
+        }
+        await tokenRef.update(updateData);
       }
 
       return {ok: true};
