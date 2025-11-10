@@ -10,6 +10,12 @@ import { logger } from "firebase-functions";
 import * as admin from "firebase-admin";
 import Stripe from "stripe";
 import { generateReceiptNumber } from "./donations";
+import {
+  checkEventProcessed,
+  markEventStarted,
+  markEventCompleted,
+  markEventFailed,
+} from "./utils/webhookIdempotency";
 
 const db = admin.firestore();
 
@@ -92,7 +98,24 @@ export const handleStripeWebhook = onRequest(
       return;
     }
 
-    logger.info("Webhook received", { type: event.type });
+    logger.info("Webhook received", { type: event.type, id: event.id });
+
+    // ============================================================================
+    // IDEMPOTENCY CHECK - Prevent duplicate processing
+    // ============================================================================
+    const { isProcessed } = await checkEventProcessed(event.id);
+
+    if (isProcessed) {
+      logger.info("✅ Event already processed - skipping", {
+        eventId: event.id,
+        eventType: event.type,
+      });
+      res.json({ received: true, skipped: "already_processed" });
+      return;
+    }
+
+    // Mark event as started (creates tracking record)
+    await markEventStarted(event.id, event.type);
 
     try {
       switch (event.type) {
@@ -142,9 +165,22 @@ export const handleStripeWebhook = onRequest(
           logger.info("Unhandled webhook event type", { type: event.type });
       }
 
+      // Mark event as successfully completed
+      await markEventCompleted(event.id);
+
       res.json({ received: true });
     } catch (error: any) {
-      logger.error("Error processing webhook", error);
+      logger.error("Error processing webhook", {
+        eventId: event.id,
+        eventType: event.type,
+        error: error.message,
+      });
+
+      // Mark event as failed for retry tracking
+      await markEventFailed(event.id, error.message);
+
+      // Return 500 to tell Stripe to retry
+      // Stripe will retry failed webhooks automatically
       res.status(500).send("Webhook processing failed");
     }
   }
