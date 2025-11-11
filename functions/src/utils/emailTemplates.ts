@@ -588,10 +588,19 @@ export interface SendEmailParams {
 
 export async function sendEmail(params: SendEmailParams): Promise<boolean> {
   try {
+    // Short-circuit during local emulator runs to avoid network latency/timeouts
+    if (process.env.FUNCTIONS_EMULATOR === "true" || process.env.FIREBASE_EMULATOR_HUB) {
+      logger.info("(EMULATOR) Skipping real email send, simulating success", {
+        to: params.to,
+        subject: params.subject,
+      });
+      return true; // Simulate success so downstream logic proceeds
+    }
+
     const resend = new Resend(process.env.RESEND_API_KEY);
 
     const result = await resend.emails.send({
-      from: params.from || "Al Ansar <onboarding@resend.dev>",
+      from: params.from || "Al Ansar <donations@alansar.app>",
       to: params.to,
       subject: params.subject,
       html: params.html,

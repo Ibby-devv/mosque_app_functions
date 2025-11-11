@@ -16,6 +16,12 @@ import {
   markEventCompleted,
   markEventFailed,
 } from "./utils/webhookIdempotency";
+import {
+  oneTimeDonationReceipt,
+  recurringDonationWelcome,
+  monthlyRecurringReceipt,
+  sendEmail,
+} from "./utils/emailTemplates";
 
 const db = admin.firestore();
 
@@ -66,11 +72,14 @@ export const handleStripeWebhook = onRequest(
   {
     region: "australia-southeast1",
     cors: true,
+    timeoutSeconds: 120,
     // eslint-disable-next-line max-len
-    secrets: ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "RESEND_API_KEY"], // Secret Manager
+    secrets: process.env.FUNCTIONS_EMULATOR === "true" 
+      ? [] // No secrets in emulator - use env vars directly
+      : ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "RESEND_API_KEY"], // Secret Manager for production
   },
   async (req, res) => {
-    // Initialize Stripe with secrets from Secret Manager
+    // Initialize Stripe - uses env vars in emulator, Secret Manager in production
     const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
       apiVersion: "2023-10-16",
     });
@@ -100,6 +109,23 @@ export const handleStripeWebhook = onRequest(
 
     logger.info("Webhook received", { type: event.type, id: event.id });
 
+    // Quickly ignore noisy/unhandled event types to avoid unnecessary work in emulator
+    const handledEventTypes = new Set([
+      "checkout.session.completed",
+      "payment_intent.succeeded",
+      "payment_intent.payment_failed",
+      "customer.subscription.created",
+      "invoice.payment_succeeded",
+      "invoice.payment_failed",
+      "customer.subscription.deleted",
+    ]);
+
+    if (!handledEventTypes.has(event.type)) {
+      logger.info("Ignoring unhandled event type (no-op)", { type: event.type });
+      res.json({ received: true, ignored: true });
+      return;
+    }
+
     // ============================================================================
     // IDEMPOTENCY CHECK - Prevent duplicate processing
     // ============================================================================
@@ -119,6 +145,14 @@ export const handleStripeWebhook = onRequest(
 
     try {
       switch (event.type) {
+        // Checkout session completed (PRIMARY event for one-time & subscription setup)
+        case "checkout.session.completed":
+          await handleCheckoutSessionCompleted(
+            event.data.object as Stripe.Checkout.Session,
+            stripe
+          );
+          break;
+
         // One-time payment succeeded
         case "payment_intent.succeeded":
           await handlePaymentIntentSucceeded(
@@ -187,6 +221,267 @@ export const handleStripeWebhook = onRequest(
 );
 
 // ============================================================================
+// HANDLER: Checkout Session Completed (PRIMARY event for donations)
+// ============================================================================
+// This is the most reliable event for processing both one-time and recurring donations
+// It fires immediately after successful checkout and contains all customer details
+
+async function handleCheckoutSessionCompleted(
+  session: Stripe.Checkout.Session,
+  stripe: Stripe
+) {
+  try {
+    logger.info("🎯 Processing checkout.session.completed", {
+      sessionId: session.id,
+      mode: session.mode,
+      amount: session.amount_total,
+    });
+
+    // Handle based on checkout mode
+    if (session.mode === "payment") {
+      // ONE-TIME DONATION
+      await handleCheckoutOneTime(session, stripe);
+    } else if (session.mode === "subscription") {
+      // RECURRING DONATION SETUP
+      await handleCheckoutSubscription(session, stripe);
+    } else {
+      logger.warn("Unknown checkout mode", { mode: session.mode });
+    }
+  } catch (error) {
+    logger.error("Error handling checkout session completed", error);
+    throw error;
+  }
+}
+
+// ============================================================================
+// HANDLER: Checkout One-Time Donation
+// ============================================================================
+
+async function handleCheckoutOneTime(
+  session: Stripe.Checkout.Session,
+  stripe: Stripe
+) {
+  try {
+    const metadata = session.metadata || {};
+
+    logger.info("💰 Processing one-time donation from checkout", {
+      sessionId: session.id,
+      amount: session.amount_total,
+      donorEmail: session.customer_details?.email,
+    });
+
+    // Generate receipt number
+    const receiptNumber = await generateReceiptNumber();
+
+    // Get payment intent for more details
+    const paymentIntentId =
+      typeof session.payment_intent === "string"
+        ? session.payment_intent
+        : null;
+
+    let paymentMethod = null;
+    if (paymentIntentId) {
+      const paymentIntent = await stripe.paymentIntents.retrieve(
+        paymentIntentId
+      );
+      const paymentMethodId =
+        typeof paymentIntent.payment_method === "string"
+          ? paymentIntent.payment_method
+          : null;
+
+      if (paymentMethodId) {
+        paymentMethod = await stripe.paymentMethods.retrieve(paymentMethodId);
+      }
+    }
+
+    // Extract customer details from session
+  const customerEmail = session.customer_details?.email || metadata.donor_email || null;
+  const customerName = session.customer_details?.name || metadata.donor_name || "Anonymous";
+
+    // Create donation record
+    const donationRef = db.collection("donations").doc();
+    await donationRef.set({
+      id: donationRef.id,
+      receipt_number: receiptNumber,
+
+      // Donor info
+      donor_name: customerName,
+      donor_email: customerEmail,
+      donor_phone: metadata.donor_phone || null,
+
+      // Payment info
+  amount: session.amount_total || 0,
+  currency: (session.currency || "aud").toUpperCase(),
+
+      // Stripe details
+      stripe_payment_intent_id: paymentIntentId,
+      stripe_checkout_session_id: session.id,
+      stripe_customer_id:
+        typeof session.customer === "string" ? session.customer : null,
+      payment_method_type: paymentMethod?.type || "card",
+      card_last4: paymentMethod?.card?.last4 || null,
+      card_brand: paymentMethod?.card?.brand || null,
+
+      // Status
+      payment_status: "succeeded",
+
+      // Donation details
+  donation_type_id: metadata.donation_type_id || null,
+  donation_type_label: metadata.donation_type_label || "General Donation",
+      campaign_id: metadata.campaign_id || null,
+      is_recurring: false,
+
+      // Metadata
+      donor_message: metadata.donor_message || null,
+
+      // Email tracking
+      receipt_email_sent: false,
+      receipt_sent_at: null,
+
+      // Timestamps
+      date: getSydneyDate(),
+      created_at: admin.firestore.FieldValue.serverTimestamp(),
+      completed_at: admin.firestore.FieldValue.serverTimestamp(),
+      updated_at: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    logger.info("✅ One-time donation recorded", {
+      donationId: donationRef.id,
+      receiptNumber,
+      amount: session.amount_total,
+    });
+
+    // Update campaign total if applicable
+    if (metadata.campaign_id && session.amount_total) {
+      await updateCampaignTotal(metadata.campaign_id, session.amount_total);
+    }
+
+    // Send receipt email if email provided
+    if (customerEmail) {
+      logger.info("📧 Sending one-time donation receipt", {
+        email: customerEmail,
+        receiptNumber,
+      });
+
+      const emailData = oneTimeDonationReceipt({
+        donorName: customerName,
+        amount: session.amount_total || 0,
+        currency: session.currency || "aud",
+        receiptNumber,
+        date: getSydneyDate(),
+        donationType: metadata.donation_type_label || "General Donation",
+        campaignName: metadata.campaign_name,
+        cardLast4: paymentMethod?.card?.last4,
+        cardBrand: paymentMethod?.card?.brand,
+      });
+
+      const emailSent = await sendEmail({
+        to: customerEmail,
+        subject: emailData.subject,
+        html: emailData.html,
+      });
+
+      // Update donation record with email status
+      await donationRef.update({
+        receipt_email_sent: emailSent,
+        receipt_sent_at: emailSent
+          ? admin.firestore.FieldValue.serverTimestamp()
+          : null,
+      });
+    } else {
+      logger.info("ℹ️ No email - anonymous donation", {
+        donationId: donationRef.id,
+      });
+    }
+  } catch (error) {
+    logger.error("Error handling checkout one-time donation", error);
+    throw error;
+  }
+}
+
+// ============================================================================
+// HANDLER: Checkout Subscription Setup
+// ============================================================================
+
+async function handleCheckoutSubscription(
+  session: Stripe.Checkout.Session,
+  stripe: Stripe
+) {
+  try {
+    const metadata = session.metadata || {};
+
+    logger.info("🔄 Processing subscription setup from checkout", {
+      sessionId: session.id,
+      subscriptionId: session.subscription,
+    });
+
+    // Get full subscription details
+    const subscriptionId =
+      typeof session.subscription === "string" ? session.subscription : null;
+
+    if (!subscriptionId) {
+      logger.error("No subscription ID in checkout session", {
+        sessionId: session.id,
+      });
+      return;
+    }
+
+    const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+
+    // Extract customer details
+    const customerEmail = session.customer_details?.email || metadata.donor_email || "";
+    const customerName = session.customer_details?.name || metadata.donor_name || "Anonymous";
+
+    // Calculate next payment date
+    const nextPaymentDate = calculateNextPaymentDate(metadata.frequency);
+
+    // Subscription record is created by customer.subscription.created event
+    // Here we just send the welcome email
+
+    logger.info("📧 Sending recurring donation welcome email", {
+      email: customerEmail,
+      subscriptionId,
+    });
+
+    if (customerEmail) {
+      // Create portal session for management
+      const portalSession = await stripe.billingPortal.sessions.create({
+        customer:
+          typeof subscription.customer === "string"
+            ? subscription.customer
+            : subscription.customer.id,
+        return_url: "alansar://donations",
+      });
+
+      const emailData = recurringDonationWelcome({
+        donorName: customerName,
+        amount: subscription.items.data[0].price.unit_amount || 0,
+        currency: subscription.currency || "aud",
+        frequency: metadata.frequency || "monthly",
+        donationType: metadata.donation_type_label || "General Donation",
+        campaignName: metadata.campaign_name,
+        nextPaymentDate,
+        manageUrl: portalSession.url,
+      });
+
+      await sendEmail({
+        to: customerEmail,
+        subject: emailData.subject,
+        html: emailData.html,
+      });
+
+      logger.info("✅ Welcome email sent for subscription", {
+        subscriptionId,
+        email: customerEmail,
+      });
+    }
+  } catch (error) {
+    logger.error("Error handling checkout subscription", error);
+    throw error;
+  }
+}
+
+// ============================================================================
 // HANDLER: Payment Intent Succeeded (One-Time Donation)
 // ============================================================================
 
@@ -197,41 +492,22 @@ async function handlePaymentIntentSucceeded(
   try {
     const metadata = paymentIntent.metadata;
 
-    // ========== DEBUG LOGGING ==========
-    logger.info("=== PAYMENT INTENT RECEIVED ===", {
+    logger.info("💳 Payment intent succeeded", {
       paymentIntentId: paymentIntent.id,
       amount: paymentIntent.amount,
-      currency: paymentIntent.currency,
+      hasInvoice: !!paymentIntent.invoice,
     });
 
-    logger.info("Payment Intent Invoice Field", {
-      invoice: paymentIntent.invoice,
-      invoiceType: typeof paymentIntent.invoice,
-      invoiceIsNull: paymentIntent.invoice === null,
-      invoiceIsUndefined: paymentIntent.invoice === undefined,
-      invoiceIsFalsy: !paymentIntent.invoice,
-    });
+    // ============================================================================
+    // SKIP LOGIC: Avoid duplicate processing
+    // ============================================================================
 
-    logger.info("Payment Intent Metadata", {
-      metadata: metadata,
-      has_is_recurring: "is_recurring" in metadata,
-      is_recurring_value: metadata.is_recurring,
-      is_recurring_type: typeof metadata.is_recurring,
-    });
-
-    logger.info("Payment Intent Full Object Keys", {
-      keys: Object.keys(paymentIntent).sort(),
-    });
-    // ========== END DEBUG LOGGING ==========
-
-    // Check if this is part of a subscription (skip if yes)
-    // Invoice can be null, undefined, or empty string for one-time payments
-    // is_recurring is a string "true" or "false" from metadata
+    // 1. Skip if this is part of a subscription (will be handled by invoice.payment_succeeded)
     const hasInvoice = paymentIntent.invoice && paymentIntent.invoice !== "";
     const isRecurring = metadata.is_recurring === "true";
 
-    if (hasInvoice && isRecurring) {
-      logger.info("❌ SKIPPING: Payment intent is part of subscription", {
+    if (hasInvoice || isRecurring) {
+      logger.info("⏭️ SKIP: Payment intent is part of subscription", {
         paymentIntentId: paymentIntent.id,
         invoice: paymentIntent.invoice,
         is_recurring: metadata.is_recurring,
@@ -239,10 +515,51 @@ async function handlePaymentIntentSucceeded(
       return;
     }
 
-    logger.info("✅ PROCESSING: One-time donation", {
+    // 1b. Additional check: Skip if latest_charge is attached to an invoice (subscription payment)
+    if (paymentIntent.latest_charge) {
+      try {
+        const chargeId = typeof paymentIntent.latest_charge === 'string' 
+          ? paymentIntent.latest_charge 
+          : paymentIntent.latest_charge.id;
+        
+        const charge = await stripe.charges.retrieve(chargeId);
+        
+        if (charge.invoice) {
+          logger.info("⏭️ SKIP: Payment intent charge is linked to invoice (subscription)", {
+            paymentIntentId: paymentIntent.id,
+            invoiceId: charge.invoice,
+          });
+          return;
+        }
+      } catch (e: any) {
+        logger.warn("Could not verify charge for subscription check", { 
+          error: e.message,
+          paymentIntentId: paymentIntent.id,
+        });
+      }
+    }
+
+    // 2. Check if this payment was already processed via checkout.session.completed
+    const existingDonation = await db
+      .collection("donations")
+      .where("stripe_payment_intent_id", "==", paymentIntent.id)
+      .limit(1)
+      .get();
+
+    if (!existingDonation.empty) {
+      logger.info("⏭️ SKIP: Donation already processed by checkout.session.completed", {
+        paymentIntentId: paymentIntent.id,
+        donationId: existingDonation.docs[0].id,
+      });
+      return;
+    }
+
+    // ============================================================================
+    // PROCESS: This is a one-time payment not yet processed
+    // ============================================================================
+
+    logger.info("✅ PROCESSING: One-time donation (fallback)", {
       paymentIntentId: paymentIntent.id,
-      hasInvoice,
-      isRecurring,
     });
 
     // Generate receipt number
@@ -255,6 +572,10 @@ async function handlePaymentIntentSucceeded(
         ? await stripe.paymentMethods.retrieve(paymentIntent.payment_method)
         : null;
 
+    // Extract donor info
+  const donorEmail = metadata.donor_email || null;
+  const donorName = metadata.donor_name || "Anonymous";
+
     // Create donation record
     const donationRef = db.collection("donations").doc();
     await donationRef.set({
@@ -262,8 +583,8 @@ async function handlePaymentIntentSucceeded(
       receipt_number: receiptNumber,
 
       // Donor info
-      donor_name: metadata.donor_name || "Anonymous",
-      donor_email: metadata.donor_email,
+      donor_name: donorName,
+      donor_email: donorEmail,
       donor_phone: metadata.donor_phone || null,
 
       // Payment info
@@ -284,13 +605,17 @@ async function handlePaymentIntentSucceeded(
       payment_status: "succeeded",
 
       // Donation details
-      donation_type_id: metadata.donation_type_id,
-      donation_type_label: metadata.donation_type_label,
+  donation_type_id: metadata.donation_type_id || null,
+  donation_type_label: metadata.donation_type_label || "General Donation",
       campaign_id: metadata.campaign_id || null,
       is_recurring: false,
 
       // Metadata
       donor_message: metadata.donor_message || null,
+
+      // Email tracking
+      receipt_email_sent: false,
+      receipt_sent_at: null,
 
       // Timestamps
       date: getSydneyDate(),
@@ -299,16 +624,54 @@ async function handlePaymentIntentSucceeded(
       updated_at: admin.firestore.FieldValue.serverTimestamp(),
     });
 
+    logger.info("✅ One-time donation recorded (fallback)", {
+      donationId: donationRef.id,
+      receiptNumber,
+      amount: paymentIntent.amount,
+    });
+
     // Update campaign total if applicable
     if (metadata.campaign_id) {
       await updateCampaignTotal(metadata.campaign_id, paymentIntent.amount);
     }
 
-    logger.info("One-time donation recorded", {
-      donationId: donationRef.id,
-      receiptNumber,
-      amount: paymentIntent.amount,
-    });
+    // Send receipt email if email provided
+    if (donorEmail) {
+      logger.info("📧 Sending one-time donation receipt (fallback)", {
+        email: donorEmail,
+        receiptNumber,
+      });
+
+      const emailData = oneTimeDonationReceipt({
+        donorName,
+        amount: paymentIntent.amount,
+        currency: paymentIntent.currency,
+        receiptNumber,
+        date: getSydneyDate(),
+        donationType: metadata.donation_type_label || "General Donation",
+        campaignName: metadata.campaign_name,
+        cardLast4: paymentMethod?.card?.last4,
+        cardBrand: paymentMethod?.card?.brand,
+      });
+
+      const emailSent = await sendEmail({
+        to: donorEmail,
+        subject: emailData.subject,
+        html: emailData.html,
+      });
+
+      // Update donation record with email status
+      await donationRef.update({
+        receipt_email_sent: emailSent,
+        receipt_sent_at: emailSent
+          ? admin.firestore.FieldValue.serverTimestamp()
+          : null,
+      });
+    } else {
+      logger.info("ℹ️ No email - anonymous donation", {
+        donationId: donationRef.id,
+      });
+    }
   } catch (error) {
     logger.error("Error handling payment intent succeeded", error);
     throw error;
@@ -336,7 +699,7 @@ async function handlePaymentIntentFailed(paymentIntent: Stripe.PaymentIntent) {
 
 async function handleSubscriptionCreated(subscription: Stripe.Subscription) {
   try {
-    const metadata = subscription.metadata;
+    const metadata = subscription.metadata || ({} as Record<string, string>);
 
     // Create recurring donation record
     await db
@@ -351,21 +714,23 @@ async function handleSubscriptionCreated(subscription: Stripe.Subscription) {
             : subscription.customer.id,
 
         // Donor info
-        donor_name: metadata.donor_name,
-        donor_email: metadata.donor_email,
+        donor_name: metadata.donor_name || "Anonymous",
+        donor_email: metadata.donor_email || null,
 
         // Subscription details
         amount: subscription.items.data[0].price.unit_amount || 0,
-        currency: subscription.currency.toUpperCase(),
-        frequency: metadata.frequency,
+        currency: (subscription.currency || "aud").toUpperCase(),
+        frequency: metadata.frequency || "monthly",
 
         // Status
         status: "active",
-        next_payment_date: calculateNextPaymentDate(metadata.frequency),
+        next_payment_date: calculateNextPaymentDate(
+          metadata.frequency || "monthly"
+        ),
 
         // Donation details
-        donation_type_id: metadata.donation_type_id,
-        donation_type_label: metadata.donation_type_label,
+        donation_type_id: metadata.donation_type_id || null,
+        donation_type_label: metadata.donation_type_label || "General Donation",
         campaign_id: metadata.campaign_id || null,
 
         // Timestamps
@@ -375,9 +740,58 @@ async function handleSubscriptionCreated(subscription: Stripe.Subscription) {
 
     logger.info("Recurring donation created", {
       subscriptionId: subscription.id,
-      frequency: metadata.frequency,
+      frequency: metadata.frequency || "monthly",
       amount: subscription.items.data[0].price.unit_amount,
     });
+
+    // Also send welcome email (for non-Checkout flows)
+    try {
+      const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
+        apiVersion: "2023-10-16",
+      });
+
+      const customerId =
+        typeof subscription.customer === "string"
+          ? subscription.customer
+          : subscription.customer.id;
+
+      // Create portal session for management
+      const portalSession = await stripe.billingPortal.sessions.create({
+        customer: customerId,
+        return_url: "alansar://donations",
+      });
+
+      // Compute next payment date based on frequency
+      const nextPaymentDate = calculateNextPaymentDate(
+        metadata.frequency || "monthly"
+      );
+
+      if (metadata.donor_email) {
+        const emailData = recurringDonationWelcome({
+          donorName: metadata.donor_name || "Anonymous",
+          amount: subscription.items.data[0].price.unit_amount || 0,
+          currency: subscription.currency || "aud",
+          frequency: metadata.frequency || "monthly",
+          donationType: metadata.donation_type_label || "General Donation",
+          campaignName: undefined,
+          nextPaymentDate,
+          manageUrl: portalSession.url,
+        });
+
+        await sendEmail({
+          to: metadata.donor_email,
+          subject: emailData.subject,
+          html: emailData.html,
+        });
+
+        logger.info("✅ Welcome email sent (subscription.created)", {
+          subscriptionId: subscription.id,
+          email: metadata.donor_email,
+        });
+      }
+    } catch (e) {
+      logger.error("Failed to send welcome email on subscription.created", e);
+    }
   } catch (error) {
     logger.error("Error handling subscription created", error);
     throw error;
@@ -393,15 +807,37 @@ async function handleInvoicePaymentSucceeded(
   stripe: Stripe
 ) {
   try {
-    // Only process if this is a subscription invoice
-    if (!invoice.subscription || typeof invoice.subscription !== "string") {
+    logger.info("📋 Processing invoice.payment_succeeded", {
+      invoiceId: invoice.id,
+    });
+
+    // Extract subscription ID - can be at top level or nested in parent.subscription_details
+    let subscriptionId: string | null = null;
+    
+    if (invoice.subscription) {
+      subscriptionId = typeof invoice.subscription === "string"
+        ? invoice.subscription
+        : invoice.subscription.id;
+    } else if ((invoice as any).parent?.subscription_details?.subscription) {
+      // Handle nested subscription ID in parent object
+      subscriptionId = (invoice as any).parent.subscription_details.subscription;
+    }
+
+    if (!subscriptionId) {
+      logger.info("⏭️ SKIP: Not a subscription invoice", {
+        invoiceId: invoice.id,
+        hasParent: !!(invoice as any).parent,
+      });
       return;
     }
 
-    const subscription = await stripe.subscriptions.retrieve(
-      invoice.subscription
-    );
-    const metadata = subscription.metadata;
+    logger.info("📋 Retrieved subscription ID", {
+      invoiceId: invoice.id,
+      subscriptionId,
+    });
+
+    const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+  const metadata = subscription.metadata || ({} as Record<string, string>);
 
     // Generate receipt number
     const receiptNumber = await generateReceiptNumber();
@@ -432,13 +868,13 @@ async function handleInvoicePaymentSucceeded(
       receipt_number: receiptNumber,
 
       // Donor info
-      donor_name: metadata.donor_name,
-      donor_email: metadata.donor_email,
-      donor_phone: metadata.donor_phone || null,
+  donor_name: metadata.donor_name || "Anonymous",
+  donor_email: metadata.donor_email || null,
+  donor_phone: metadata.donor_phone || null,
 
       // Payment info
-      amount: invoice.amount_paid,
-      currency: invoice.currency.toUpperCase(),
+  amount: invoice.amount_paid,
+  currency: (invoice.currency || "aud").toUpperCase(),
 
       // Stripe details
       stripe_payment_intent_id: paymentIntentId,
@@ -455,11 +891,11 @@ async function handleInvoicePaymentSucceeded(
       payment_status: "succeeded",
 
       // Donation details
-      donation_type_id: metadata.donation_type_id,
-      donation_type_label: metadata.donation_type_label,
-      campaign_id: metadata.campaign_id || null,
-      is_recurring: true,
-      recurring_frequency: metadata.frequency,
+  donation_type_id: metadata.donation_type_id || null,
+  donation_type_label: metadata.donation_type_label || "General Donation",
+  campaign_id: metadata.campaign_id || null,
+  is_recurring: true,
+  recurring_frequency: metadata.frequency || "monthly",
 
       // Timestamps
       date: getSydneyDate(),
@@ -475,7 +911,9 @@ async function handleInvoicePaymentSucceeded(
       .update({
         last_payment_at: admin.firestore.FieldValue.serverTimestamp(),
         last_payment_donation_id: donationRef.id,
-        next_payment_date: calculateNextPaymentDate(metadata.frequency),
+        next_payment_date: calculateNextPaymentDate(
+          metadata.frequency || "monthly"
+        ),
       });
 
     // Update campaign total if applicable
@@ -489,6 +927,58 @@ async function handleInvoicePaymentSucceeded(
       receiptNumber,
       amount: invoice.amount_paid,
     });
+
+    // Send recurring receipt email
+    try {
+      const customerId =
+        typeof subscription.customer === "string"
+          ? subscription.customer
+          : subscription.customer.id;
+
+      const portalSession = await stripe.billingPortal.sessions.create({
+        customer: customerId,
+        return_url: "alansar://donations",
+      });
+
+      const nextPaymentDate = calculateNextPaymentDate(
+        metadata.frequency || "monthly"
+      );
+
+      if (metadata.donor_email) {
+        const emailData = monthlyRecurringReceipt({
+          donorName: metadata.donor_name || "Anonymous",
+          amount: invoice.amount_paid,
+          currency: invoice.currency || "aud",
+          receiptNumber,
+          date: getSydneyDate(),
+          frequency: metadata.frequency || "monthly",
+          donationType: metadata.donation_type_label || "General Donation",
+          campaignName: undefined,
+          nextPaymentDate,
+          manageUrl: portalSession.url,
+        });
+
+        const emailSent = await sendEmail({
+          to: metadata.donor_email,
+          subject: emailData.subject,
+          html: emailData.html,
+        });
+
+        await donationRef.update({
+          receipt_email_sent: emailSent,
+          receipt_sent_at: emailSent
+            ? admin.firestore.FieldValue.serverTimestamp()
+            : null,
+        });
+
+        logger.info("✅ Recurring receipt email sent", {
+          donationId: donationRef.id,
+          email: metadata.donor_email,
+        });
+      }
+    } catch (e) {
+      logger.error("Failed to send recurring receipt email", e);
+    }
   } catch (error) {
     logger.error("Error handling invoice payment succeeded", error);
     throw error;

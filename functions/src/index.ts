@@ -4,7 +4,23 @@ import * as admin from "firebase-admin";
 // Set global region for all functions
 setGlobalOptions({ region: "australia-southeast1" });
 
+// When running in the Functions emulator, ensure Admin SDK points to local emulators
+if (process.env.FUNCTIONS_EMULATOR === "true") {
+  // Point Firestore Admin SDK to the emulator if not already set by the tool
+  if (!process.env.FIRESTORE_EMULATOR_HOST) {
+    process.env.FIRESTORE_EMULATOR_HOST = "127.0.0.1:8080";
+  }
+}
+
 admin.initializeApp();
+
+// Avoid failing writes on undefined fields inside objects
+try {
+  const firestore = admin.firestore();
+  firestore.settings({ ignoreUndefinedProperties: true as any });
+} catch {
+  // no-op if settings already applied
+}
 
 export {
   createPaymentIntent,
