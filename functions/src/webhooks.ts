@@ -1502,7 +1502,140 @@ async function handleDisputeCreated(
       disputeId: dispute.id,
     });
 
-    // Log admin alert (you can extend this to send email/SMS to admins)
+    // Send urgent admin email notification
+    const { Resend } = await import("resend");
+    const resend = new Resend(process.env.RESEND_API_KEY);
+
+    const adminEmail = "donations@alansar.app"; // TODO: Use a dedicated admin email
+    const disputeAmount = (dispute.amount / 100).toFixed(2);
+    const disputeDueDate = dispute.evidence_details.due_by 
+      ? new Date(dispute.evidence_details.due_by * 1000).toLocaleDateString("en-AU")
+      : "Unknown";
+
+    await resend.emails.send({
+      from: "Al Ansar Alerts <donations@alansar.app>",
+      to: adminEmail,
+      subject: `🚨 URGENT: Dispute Created - $${disputeAmount} AUD`,
+      html: `
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          </head>
+          <body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #f5f5f5;">
+            <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f5f5f5; padding: 20px;">
+              <tr>
+                <td align="center">
+                  <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 8px; overflow: hidden; border: 3px solid #dc2626;">
+                    <tr>
+                      <td style="background-color: #dc2626; padding: 30px; text-align: center;">
+                        <h1 style="color: #ffffff; margin: 0; font-size: 28px;">🚨 URGENT: Dispute Created</h1>
+                      </td>
+                    </tr>
+                    
+                    <tr>
+                      <td style="padding: 40px 30px; background-color: #fef2f2;">
+                        <h2 style="color: #991b1b; margin: 0 0 20px 0;">Immediate Action Required</h2>
+                        <p style="color: #991b1b; font-size: 18px; font-weight: bold; margin: 0 0 15px 0;">
+                          A chargeback dispute has been filed for a donation.
+                        </p>
+                        <p style="color: #4b5563; font-size: 14px; margin: 0 0 25px 0;">
+                          You must respond before <strong>${disputeDueDate}</strong> or the dispute will automatically be lost.
+                        </p>
+                      </td>
+                    </tr>
+                    
+                    <tr>
+                      <td style="padding: 0 30px 30px 30px;">
+                        <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f9fafb; border-radius: 8px; padding: 20px;">
+                          <tr>
+                            <td>
+                              <h3 style="color: #1f2937; margin: 0 0 15px 0;">Dispute Details</h3>
+                              <table width="100%" cellpadding="8" cellspacing="0">
+                                <tr>
+                                  <td style="color: #6b7280; font-size: 14px; border-bottom: 1px solid #e5e7eb;"><strong>Amount:</strong></td>
+                                  <td style="color: #1f2937; font-size: 14px; border-bottom: 1px solid #e5e7eb;">$${disputeAmount} AUD</td>
+                                </tr>
+                                <tr>
+                                  <td style="color: #6b7280; font-size: 14px; border-bottom: 1px solid #e5e7eb;"><strong>Reason:</strong></td>
+                                  <td style="color: #1f2937; font-size: 14px; border-bottom: 1px solid #e5e7eb;">${dispute.reason}</td>
+                                </tr>
+                                <tr>
+                                  <td style="color: #6b7280; font-size: 14px; border-bottom: 1px solid #e5e7eb;"><strong>Donor Email:</strong></td>
+                                  <td style="color: #1f2937; font-size: 14px; border-bottom: 1px solid #e5e7eb;">${donationData.donor_email || "N/A"}</td>
+                                </tr>
+                                <tr>
+                                  <td style="color: #6b7280; font-size: 14px; border-bottom: 1px solid #e5e7eb;"><strong>Donor Name:</strong></td>
+                                  <td style="color: #1f2937; font-size: 14px; border-bottom: 1px solid #e5e7eb;">${donationData.donor_name}</td>
+                                </tr>
+                                <tr>
+                                  <td style="color: #6b7280; font-size: 14px; border-bottom: 1px solid #e5e7eb;"><strong>Receipt #:</strong></td>
+                                  <td style="color: #1f2937; font-size: 14px; border-bottom: 1px solid #e5e7eb;">${donationData.receipt_number}</td>
+                                </tr>
+                                <tr>
+                                  <td style="color: #6b7280; font-size: 14px; border-bottom: 1px solid #e5e7eb;"><strong>Dispute ID:</strong></td>
+                                  <td style="color: #1f2937; font-size: 14px; border-bottom: 1px solid #e5e7eb;">${dispute.id}</td>
+                                </tr>
+                                <tr>
+                                  <td style="color: #6b7280; font-size: 14px;"><strong>Response Due:</strong></td>
+                                  <td style="color: #dc2626; font-size: 14px; font-weight: bold;">${disputeDueDate}</td>
+                                </tr>
+                              </table>
+                            </td>
+                          </tr>
+                        </table>
+                        
+                        <table width="100%" cellpadding="0" cellspacing="0" style="margin-top: 25px;">
+                          <tr>
+                            <td align="center">
+                              <a href="https://dashboard.stripe.com/disputes/${dispute.id}" 
+                                 style="display: inline-block; 
+                                        background-color: #dc2626; 
+                                        color: #ffffff; 
+                                        text-decoration: none; 
+                                        padding: 16px 40px; 
+                                        border-radius: 8px; 
+                                        font-size: 18px; 
+                                        font-weight: bold;">
+                                Respond to Dispute in Stripe
+                              </a>
+                            </td>
+                          </tr>
+                        </table>
+                        
+                        <div style="background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 15px; margin: 25px 0; border-radius: 4px;">
+                          <p style="color: #92400e; font-size: 14px; margin: 0; font-weight: bold;">⚠️ Important Notes:</p>
+                          <ul style="color: #92400e; font-size: 14px; margin: 10px 0 0 0; padding-left: 20px;">
+                            <li>Gather all evidence: receipts, communication logs, delivery proof</li>
+                            <li>Respond promptly - late responses are automatically lost</li>
+                            <li>Stripe charges a $25 AUD dispute fee regardless of outcome</li>
+                            <li>Check if this is part of a recurring subscription</li>
+                          </ul>
+                        </div>
+                      </td>
+                    </tr>
+                    
+                    <tr>
+                      <td style="background-color: #f9fafb; padding: 20px; text-align: center; border-top: 1px solid #e5e7eb;">
+                        <p style="color: #6b7280; font-size: 12px; margin: 0;">Al Ansar Masjid - Stripe Dispute Alert</p>
+                      </td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+            </table>
+          </body>
+        </html>
+      `,
+    });
+
+    logger.info("✅ Admin dispute alert email sent", {
+      disputeId: dispute.id,
+      adminEmail,
+    });
+
+    // Log for monitoring
     logger.error("🚨 ADMIN ALERT: Dispute created", {
       disputeId: dispute.id,
       donationId: donationDoc.id,
