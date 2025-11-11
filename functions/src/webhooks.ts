@@ -115,9 +115,12 @@ export const handleStripeWebhook = onRequest(
       "payment_intent.succeeded",
       "payment_intent.payment_failed",
       "customer.subscription.created",
+      "customer.subscription.updated",
       "invoice.payment_succeeded",
       "invoice.payment_failed",
       "customer.subscription.deleted",
+      "charge.refunded",
+      "charge.dispute.created",
     ]);
 
     if (!handledEventTypes.has(event.type)) {
@@ -175,6 +178,14 @@ export const handleStripeWebhook = onRequest(
           );
           break;
 
+        // Subscription updated (amount/frequency/payment method changed)
+        case "customer.subscription.updated":
+          await handleSubscriptionUpdated(
+            event.data.object as Stripe.Subscription,
+            stripe
+          );
+          break;
+
         // Subscription payment succeeded (recurring payment)
         case "invoice.payment_succeeded":
           await handleInvoicePaymentSucceeded(
@@ -192,6 +203,22 @@ export const handleStripeWebhook = onRequest(
         case "customer.subscription.deleted":
           await handleSubscriptionDeleted(
             event.data.object as Stripe.Subscription
+          );
+          break;
+
+        // Charge refunded
+        case "charge.refunded":
+          await handleChargeRefunded(
+            event.data.object as Stripe.Charge,
+            stripe
+          );
+          break;
+
+        // Dispute created
+        case "charge.dispute.created":
+          await handleDisputeCreated(
+            event.data.object as Stripe.Dispute,
+            stripe
           );
           break;
 
@@ -926,58 +953,68 @@ async function handleInvoicePaymentSucceeded(
       subscriptionId: subscription.id,
       receiptNumber,
       amount: invoice.amount_paid,
+      billingReason: invoice.billing_reason,
     });
 
-    // Send recurring receipt email
-    try {
-      const customerId =
-        typeof subscription.customer === "string"
-          ? subscription.customer
-          : subscription.customer.id;
-
-      const portalSession = await stripe.billingPortal.sessions.create({
-        customer: customerId,
-        return_url: "alansar://donations",
+    // Send recurring receipt email (skip for first invoice - welcome email already sent)
+    const isFirstInvoice = invoice.billing_reason === "subscription_create";
+    
+    if (isFirstInvoice) {
+      logger.info("⏭️ SKIP: First invoice receipt (welcome email already sent)", {
+        invoiceId: invoice.id,
+        subscriptionId: subscription.id,
       });
+    } else {
+      try {
+        const customerId =
+          typeof subscription.customer === "string"
+            ? subscription.customer
+            : subscription.customer.id;
 
-      const nextPaymentDate = calculateNextPaymentDate(
-        metadata.frequency || "monthly"
-      );
-
-      if (metadata.donor_email) {
-        const emailData = monthlyRecurringReceipt({
-          donorName: metadata.donor_name || "Anonymous",
-          amount: invoice.amount_paid,
-          currency: invoice.currency || "aud",
-          receiptNumber,
-          date: getSydneyDate(),
-          frequency: metadata.frequency || "monthly",
-          donationType: metadata.donation_type_label || "General Donation",
-          campaignName: undefined,
-          nextPaymentDate,
-          manageUrl: portalSession.url,
+        const portalSession = await stripe.billingPortal.sessions.create({
+          customer: customerId,
+          return_url: "alansar://donations",
         });
 
-        const emailSent = await sendEmail({
-          to: metadata.donor_email,
-          subject: emailData.subject,
-          html: emailData.html,
-        });
+        const nextPaymentDate = calculateNextPaymentDate(
+          metadata.frequency || "monthly"
+        );
 
-        await donationRef.update({
-          receipt_email_sent: emailSent,
-          receipt_sent_at: emailSent
-            ? admin.firestore.FieldValue.serverTimestamp()
-            : null,
-        });
+        if (metadata.donor_email) {
+          const emailData = monthlyRecurringReceipt({
+            donorName: metadata.donor_name || "Anonymous",
+            amount: invoice.amount_paid,
+            currency: invoice.currency || "aud",
+            receiptNumber,
+            date: getSydneyDate(),
+            frequency: metadata.frequency || "monthly",
+            donationType: metadata.donation_type_label || "General Donation",
+            campaignName: undefined,
+            nextPaymentDate,
+            manageUrl: portalSession.url,
+          });
 
-        logger.info("✅ Recurring receipt email sent", {
-          donationId: donationRef.id,
-          email: metadata.donor_email,
-        });
+          const emailSent = await sendEmail({
+            to: metadata.donor_email,
+            subject: emailData.subject,
+            html: emailData.html,
+          });
+
+          await donationRef.update({
+            receipt_email_sent: emailSent,
+            receipt_sent_at: emailSent
+              ? admin.firestore.FieldValue.serverTimestamp()
+              : null,
+          });
+
+          logger.info("✅ Recurring receipt email sent", {
+            donationId: donationRef.id,
+            email: metadata.donor_email,
+          });
+        }
+      } catch (e) {
+        logger.error("Failed to send recurring receipt email", e);
       }
-    } catch (e) {
-      logger.error("Failed to send recurring receipt email", e);
     }
   } catch (error) {
     logger.error("Error handling invoice payment succeeded", error);
@@ -990,10 +1027,15 @@ async function handleInvoicePaymentSucceeded(
 // ============================================================================
 
 async function handleInvoicePaymentFailed(invoice: Stripe.Invoice) {
+  const attemptCount = invoice.attempt_count || 0;
+  const isUrgent = attemptCount >= 3;
+
   logger.warn("⚠️ Payment failed", {
     invoiceId: invoice.id,
     customerId: invoice.customer,
     amount: invoice.amount_due,
+    attemptCount,
+    isUrgent,
   });
 
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
@@ -1020,14 +1062,37 @@ async function handleInvoicePaymentFailed(invoice: Stripe.Invoice) {
       return_url: "alansar://donations",
     });
 
-    // Send failure notification email
+    // Get next retry date if available
+    const nextRetry = invoice.next_payment_attempt
+      ? new Date(invoice.next_payment_attempt * 1000).toLocaleDateString("en-AU")
+      : null;
+
+    // Send escalated failure notification email
     const { Resend } = await import("resend");
     const resend = new Resend(process.env.RESEND_API_KEY);
 
+    const urgencyColor = isUrgent ? "#dc2626" : "#f59e0b";
+    const urgencyTitle = isUrgent ? "🚨 URGENT: Final Attempt" : "⚠️ Payment Failed";
+    const urgencyMessage = isUrgent
+      ? `<div style="background-color: #fee2e2; border-left: 4px solid #dc2626; padding: 15px; margin: 20px 0; border-radius: 4px;">
+          <p style="color: #dc2626; font-size: 16px; font-weight: bold; margin: 0 0 10px 0;">
+            ⚠️ This is attempt #${attemptCount}
+          </p>
+          <p style="color: #1f2937; font-size: 14px; margin: 0;">
+            Your subscription will be cancelled if payment fails again. Please update your payment method immediately.
+          </p>
+        </div>`
+      : `<p style="color: #4b5563; font-size: 16px; line-height: 1.6; margin: 0 0 25px 0;">
+          This usually happens when a card expires or has insufficient funds. 
+          ${nextRetry ? `We will automatically retry on ${nextRetry}.` : ""}
+        </p>`;
+
     await resend.emails.send({
-      from: "Al Ansar <onboarding@resend.dev>",
+      from: "Al Ansar <donations@alansar.app>",
       to: customerEmail,
-      subject: "Payment Failed - Action Required",
+      subject: isUrgent
+        ? `URGENT: Update payment method for recurring donation`
+        : `Payment failed - Please update payment method`,
       html: `
         <!DOCTYPE html>
         <html>
@@ -1041,8 +1106,8 @@ async function handleInvoicePaymentFailed(invoice: Stripe.Invoice) {
                 <td align="center">
                   <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 8px; overflow: hidden;">
                     <tr>
-                      <td style="background-color: #dc2626; padding: 30px; text-align: center;">
-                        <h1 style="color: #ffffff; margin: 0; font-size: 28px;">⚠️ Payment Failed</h1>
+                      <td style="background-color: ${urgencyColor}; padding: 30px; text-align: center;">
+                        <h1 style="color: #ffffff; margin: 0; font-size: 28px;">${urgencyTitle}</h1>
                       </td>
                     </tr>
                     
@@ -1055,8 +1120,9 @@ async function handleInvoicePaymentFailed(invoice: Stripe.Invoice) {
                             invoice.amount_due / 100
                           ).toFixed(2)}</strong>.
                         </p>
-                        <p style="color: #4b5563; font-size: 16px; line-height: 1.6; margin: 0 0 25px 0;">
-                          This usually happens when a card expires or has insufficient funds. Please update your payment method to continue your recurring donation.
+                        ${urgencyMessage}
+                        <p style="color: #4b5563; font-size: 16px; line-height: 1.6; margin: 25px 0;">
+                          Please update your payment method to continue your recurring donation.
                         </p>
                         
                         <table width="100%" cellpadding="0" cellspacing="0">
@@ -1064,7 +1130,7 @@ async function handleInvoicePaymentFailed(invoice: Stripe.Invoice) {
                             <td align="center" style="padding: 20px 0;">
                               <a href="${portalSession.url}" 
                                  style="display: inline-block; 
-                                        background-color: #1e3a8a; 
+                                        background-color: ${urgencyColor}; 
                                         color: #ffffff; 
                                         text-decoration: none; 
                                         padding: 16px 40px; 
@@ -1102,9 +1168,11 @@ async function handleInvoicePaymentFailed(invoice: Stripe.Invoice) {
     logger.info("✅ Payment failure email sent", {
       email: customerEmail,
       invoiceId: invoice.id,
+      attemptCount,
+      urgency: isUrgent ? "URGENT" : "standard",
     });
 
-    // Update Firestore subscription status
+    // Update Firestore subscription status with failure details
     const subscriptionQuery = await admin
       .firestore()
       .collection("recurringDonations")
@@ -1116,8 +1184,13 @@ async function handleInvoicePaymentFailed(invoice: Stripe.Invoice) {
       await subscriptionQuery.docs[0].ref.update({
         status: "past_due",
         last_payment_error: admin.firestore.FieldValue.serverTimestamp(),
+        payment_attempt_count: attemptCount,
+        payment_error_message: invoice.last_finalization_error?.message || "Payment failed",
       });
-      logger.info("📝 Updated subscription status to past_due");
+      logger.info("Updated subscription with failure details", {
+        subscriptionId: invoice.subscription,
+        attemptCount,
+      });
     }
   } catch (error: any) {
     logger.error("❌ Error handling payment failure", error);
@@ -1141,6 +1214,317 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
     });
   } catch (error) {
     logger.error("Error handling subscription deleted", error);
+    throw error;
+  }
+}
+
+// ============================================================================
+// HANDLER: Subscription Updated (Amount/Frequency/Payment Method Changed)
+// ============================================================================
+
+async function handleSubscriptionUpdated(
+  subscription: Stripe.Subscription,
+  stripe: Stripe
+) {
+  try {
+    const metadata = subscription.metadata || ({} as Record<string, string>);
+
+    logger.info("🔄 Processing subscription.updated", {
+      subscriptionId: subscription.id,
+    });
+
+    // Get current recurring donation record
+    const recurringRef = db.collection("recurringDonations").doc(subscription.id);
+    const recurringDoc = await recurringRef.get();
+
+    if (!recurringDoc.exists) {
+      logger.warn("Subscription not found in recurringDonations", {
+        subscriptionId: subscription.id,
+      });
+      return;
+    }
+
+    const currentData = recurringDoc.data();
+    const newAmount = subscription.items.data[0].price.unit_amount || 0;
+    const newFrequency = metadata.frequency || "monthly";
+
+    // Detect what changed
+    const amountChanged = currentData?.amount !== newAmount;
+    const frequencyChanged = currentData?.frequency !== newFrequency;
+    const statusChanged = currentData?.status !== subscription.status;
+
+    if (!amountChanged && !frequencyChanged && !statusChanged) {
+      logger.info("⏭️ SKIP: No meaningful subscription changes", {
+        subscriptionId: subscription.id,
+      });
+      return;
+    }
+
+    // Update Firestore
+    await recurringRef.update({
+      amount: newAmount,
+      currency: (subscription.currency || "aud").toUpperCase(),
+      frequency: newFrequency,
+      status: subscription.status,
+      next_payment_date: calculateNextPaymentDate(newFrequency),
+      updated_at: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    logger.info("✅ Subscription updated in Firestore", {
+      subscriptionId: subscription.id,
+      amountChanged,
+      frequencyChanged,
+    });
+
+    // Send confirmation email if meaningful change
+    if ((amountChanged || frequencyChanged) && metadata.donor_email) {
+      const customerId =
+        typeof subscription.customer === "string"
+          ? subscription.customer
+          : subscription.customer.id;
+
+      const portalSession = await stripe.billingPortal.sessions.create({
+        customer: customerId,
+        return_url: "alansar://donations",
+      });
+
+      const changesList = [];
+      if (amountChanged) {
+        changesList.push(
+          `Amount: $${(currentData?.amount / 100).toFixed(2)} → $${(newAmount / 100).toFixed(2)}`
+        );
+      }
+      if (frequencyChanged) {
+        changesList.push(
+          `Frequency: ${currentData?.frequency} → ${newFrequency}`
+        );
+      }
+
+      // Simple inline email for subscription changes
+      const { Resend } = await import("resend");
+      const resend = new Resend(process.env.RESEND_API_KEY);
+
+      await resend.emails.send({
+        from: "Al Ansar <donations@alansar.app>",
+        to: metadata.donor_email,
+        subject: "Your recurring donation has been updated",
+        html: `
+          <!DOCTYPE html>
+          <html>
+            <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+              <h2>Subscription Updated</h2>
+              <p>Assalamu Alaikum ${metadata.donor_name || ""},</p>
+              <p>Your recurring donation has been successfully updated:</p>
+              <ul>
+                ${changesList.map((change) => `<li>${change}</li>`).join("")}
+              </ul>
+              <p>Next payment: ${calculateNextPaymentDate(newFrequency)}</p>
+              <p><a href="${portalSession.url}" style="display: inline-block; background: #1e3a8a; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px;">Manage Subscription</a></p>
+              <p>JazakAllah Khair!</p>
+            </body>
+          </html>
+        `,
+      });
+
+      logger.info("✅ Subscription update email sent", {
+        subscriptionId: subscription.id,
+        email: metadata.donor_email,
+      });
+    }
+  } catch (error) {
+    logger.error("Error handling subscription updated", error);
+    throw error;
+  }
+}
+
+// ============================================================================
+// HANDLER: Charge Refunded
+// ============================================================================
+
+async function handleChargeRefunded(charge: Stripe.Charge, stripe: Stripe) {
+  try {
+    logger.info("💰 Processing charge.refunded", {
+      chargeId: charge.id,
+      amount: charge.amount_refunded,
+    });
+
+    // Find the donation by payment intent or charge ID
+    let donationQuery = await db
+      .collection("donations")
+      .where("stripe_payment_intent_id", "==", charge.payment_intent)
+      .limit(1)
+      .get();
+
+    if (donationQuery.empty) {
+      logger.warn("Donation not found for refunded charge", {
+        chargeId: charge.id,
+        paymentIntentId: charge.payment_intent,
+      });
+      return;
+    }
+
+    const donationDoc = donationQuery.docs[0];
+    const donationData = donationDoc.data();
+
+    // Update donation status
+    await donationDoc.ref.update({
+      payment_status: "refunded",
+      refund_amount: charge.amount_refunded,
+      refunded_at: admin.firestore.FieldValue.serverTimestamp(),
+      updated_at: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    logger.info("✅ Donation marked as refunded", {
+      donationId: donationDoc.id,
+      amount: charge.amount_refunded,
+    });
+
+    // Reverse campaign total if applicable
+    if (donationData.campaign_id && charge.amount_refunded) {
+      await updateCampaignTotal(
+        donationData.campaign_id,
+        -charge.amount_refunded
+      );
+    }
+
+    // Send refund confirmation email
+    if (donationData.donor_email) {
+      const { Resend } = await import("resend");
+      const resend = new Resend(process.env.RESEND_API_KEY);
+
+      await resend.emails.send({
+        from: "Al Ansar <donations@alansar.app>",
+        to: donationData.donor_email,
+        subject: `Refund processed - ${donationData.receipt_number}`,
+        html: `
+          <!DOCTYPE html>
+          <html>
+            <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+              <h2>Refund Processed</h2>
+              <p>Assalamu Alaikum ${donationData.donor_name || ""},</p>
+              <p>A refund of <strong>$${(charge.amount_refunded / 100).toFixed(2)}</strong> has been processed for your donation (Receipt: ${donationData.receipt_number}).</p>
+              <p><strong>Original Date:</strong> ${donationData.date}</p>
+              <p>The refund will appear on your original payment method within 5-10 business days.</p>
+              <p>If you have any questions, please contact us.</p>
+            </body>
+          </html>
+        `,
+      });
+
+      logger.info("✅ Refund confirmation email sent", {
+        donationId: donationDoc.id,
+        email: donationData.donor_email,
+      });
+    }
+  } catch (error) {
+    logger.error("Error handling charge refunded", error);
+    throw error;
+  }
+}
+
+// ============================================================================
+// HANDLER: Dispute Created
+// ============================================================================
+
+async function handleDisputeCreated(
+  dispute: Stripe.Dispute,
+  stripe: Stripe
+) {
+  try {
+    logger.warn("⚠️ Dispute created", {
+      disputeId: dispute.id,
+      chargeId: dispute.charge,
+      amount: dispute.amount,
+      reason: dispute.reason,
+    });
+
+    // Find the donation by payment intent
+    const chargeId =
+      typeof dispute.charge === "string" ? dispute.charge : dispute.charge.id;
+    const charge = await stripe.charges.retrieve(chargeId);
+
+    const paymentIntentId = typeof charge.payment_intent === "string" 
+      ? charge.payment_intent 
+      : charge.payment_intent?.id || null;
+
+    if (!paymentIntentId) {
+      logger.error("No payment intent ID found on charge", { chargeId });
+      return;
+    }
+
+    // Retry logic - donation might not be created yet (race condition with payment webhooks)
+    let donationQuery: FirebaseFirestore.QuerySnapshot<FirebaseFirestore.DocumentData> | null = null;
+    let attempts = 0;
+    const maxAttempts = 3;
+    
+    while (attempts < maxAttempts) {
+      donationQuery = await db
+        .collection("donations")
+        .where("stripe_payment_intent_id", "==", paymentIntentId)
+        .limit(1)
+        .get();
+
+      if (!donationQuery.empty) {
+        break;
+      }
+
+      attempts++;
+      if (attempts < maxAttempts) {
+        logger.info(`Donation not found, retrying... (attempt ${attempts}/${maxAttempts})`);
+        await new Promise(resolve => setTimeout(resolve, 1000 * attempts)); // 1s, 2s backoff
+      }
+    }
+
+    if (!donationQuery || donationQuery.empty) {
+      logger.warn("Donation not found for disputed charge after retries", {
+        chargeId,
+        paymentIntentId,
+        attempts: maxAttempts,
+      });
+      return;
+    }
+
+    const donationDoc = donationQuery.docs[0];
+    const donationData = donationDoc.data();
+
+    // Mark donation as disputed
+    await donationDoc.ref.update({
+      payment_status: "disputed",
+      dispute_id: dispute.id,
+      dispute_reason: dispute.reason,
+      dispute_amount: dispute.amount,
+      disputed_at: admin.firestore.FieldValue.serverTimestamp(),
+      updated_at: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    logger.info("✅ Donation marked as disputed", {
+      donationId: donationDoc.id,
+      disputeId: dispute.id,
+    });
+
+    // Log admin alert (you can extend this to send email/SMS to admins)
+    logger.error("🚨 ADMIN ALERT: Dispute created", {
+      disputeId: dispute.id,
+      donationId: donationDoc.id,
+      donor: donationData.donor_email,
+      amount: dispute.amount,
+      reason: dispute.reason,
+      receiptNumber: donationData.receipt_number,
+    });
+
+    // Optional: Pause subscription if this was a recurring donation
+    if (donationData.stripe_subscription_id) {
+      logger.warn("⚠️ Subscription related to dispute - consider manual review", {
+        subscriptionId: donationData.stripe_subscription_id,
+        disputeId: dispute.id,
+      });
+      // Uncomment to auto-pause:
+      // await stripe.subscriptions.update(donationData.stripe_subscription_id, {
+      //   pause_collection: { behavior: 'mark_uncollectible' }
+      // });
+    }
+  } catch (error) {
+    logger.error("Error handling dispute created", error);
     throw error;
   }
 }
