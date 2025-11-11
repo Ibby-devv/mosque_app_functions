@@ -600,6 +600,22 @@ async function handlePaymentIntentSucceeded(
         ? await stripe.paymentMethods.retrieve(paymentIntent.payment_method)
         : null;
 
+    // Get charge details for receipt URL
+    let receiptUrl: string | null = null;
+    if (paymentIntent.latest_charge) {
+      try {
+        const chargeId = typeof paymentIntent.latest_charge === 'string'
+          ? paymentIntent.latest_charge
+          : paymentIntent.latest_charge.id;
+        const charge = await stripe.charges.retrieve(chargeId);
+        receiptUrl = charge.receipt_url || null;
+      } catch (e: any) {
+        logger.warn("Could not retrieve charge for receipt URL", {
+          error: e.message,
+        });
+      }
+    }
+
     // Extract donor info
   const donorEmail = metadata.donor_email || null;
   const donorName = metadata.donor_name || "Anonymous";
@@ -628,6 +644,7 @@ async function handlePaymentIntentSucceeded(
       payment_method_type: paymentMethod?.type || "card",
       card_last4: paymentMethod?.card?.last4 || null,
       card_brand: paymentMethod?.card?.brand || null,
+      stripe_receipt_url: receiptUrl,
 
       // Status
       payment_status: "succeeded",
@@ -889,6 +906,22 @@ async function handleInvoicePaymentSucceeded(
       ? await stripe.paymentMethods.retrieve(paymentMethodId)
       : null;
 
+    // Get receipt URL from invoice charge
+    let receiptUrl: string | null = null;
+    if (invoice.charge) {
+      try {
+        const chargeId = typeof invoice.charge === 'string'
+          ? invoice.charge
+          : invoice.charge.id;
+        const charge = await stripe.charges.retrieve(chargeId);
+        receiptUrl = charge.receipt_url || null;
+      } catch (e: any) {
+        logger.warn("Could not retrieve charge for invoice receipt URL", {
+          error: e.message,
+        });
+      }
+    }
+
     // Create donation record for this recurring payment
     const donationRef = db.collection("donations").doc();
     await donationRef.set({
@@ -914,6 +947,7 @@ async function handleInvoicePaymentSucceeded(
       payment_method_type: pm?.type || "card",
       card_last4: pm?.card?.last4 || null,
       card_brand: pm?.card?.brand || null,
+      stripe_receipt_url: receiptUrl,
 
       // Status
       payment_status: "succeeded",
