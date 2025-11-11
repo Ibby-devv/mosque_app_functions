@@ -576,6 +576,131 @@ export function refundConfirmationEmail(data: RefundData): {
 }
 
 // ============================================================================
+// TEMPLATE: DISPUTE ADMIN ALERT EMAIL
+// ============================================================================
+
+export interface DisputeAlertEmailParams {
+  disputeAmount: string;
+  disputeDueDate: string;
+  disputeReason: string;
+  donorEmail: string;
+  donorName: string;
+  receiptNumber: string;
+  disputeId: string;
+}
+
+export function disputeAlertEmail(params: DisputeAlertEmailParams): string {
+  return `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      </head>
+      <body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: ${COLORS.background};">
+        <table width="100%" cellpadding="0" cellspacing="0" style="background-color: ${COLORS.background}; padding: 20px;">
+          <tr>
+            <td align="center">
+              <table width="600" cellpadding="0" cellspacing="0" style="background-color: ${COLORS.cardBackground}; border-radius: 8px; overflow: hidden; border: 3px solid ${COLORS.danger};">
+                ${emailHeader("URGENT: Dispute Created", COLORS.danger, "🚨")}
+                
+                <tr>
+                  <td style="padding: 40px 30px; background-color: #fef2f2;">
+                    <h2 style="color: #991b1b; margin: 0 0 20px 0;">Immediate Action Required</h2>
+                    <p style="color: #991b1b; font-size: 18px; font-weight: bold; margin: 0 0 15px 0;">
+                      A chargeback dispute has been filed for a donation.
+                    </p>
+                    <p style="color: ${COLORS.textLight}; font-size: 14px; margin: 0 0 25px 0;">
+                      You must respond before <strong>${params.disputeDueDate}</strong> or the dispute will automatically be lost.
+                    </p>
+                  </td>
+                </tr>
+                
+                <tr>
+                  <td style="padding: 0 30px 30px 30px;">
+                    <table width="100%" cellpadding="0" cellspacing="0" style="background-color: ${COLORS.footerBackground}; border-radius: 8px; padding: 20px;">
+                      <tr>
+                        <td>
+                          <h3 style="color: ${COLORS.text}; margin: 0 0 15px 0;">Dispute Details</h3>
+                          <table width="100%" cellpadding="8" cellspacing="0">
+                            <tr>
+                              <td style="color: ${COLORS.textMuted}; font-size: 14px; border-bottom: 1px solid #e5e7eb;"><strong>Amount:</strong></td>
+                              <td style="color: ${COLORS.text}; font-size: 14px; border-bottom: 1px solid #e5e7eb;">$${params.disputeAmount} AUD</td>
+                            </tr>
+                            <tr>
+                              <td style="color: ${COLORS.textMuted}; font-size: 14px; border-bottom: 1px solid #e5e7eb;"><strong>Reason:</strong></td>
+                              <td style="color: ${COLORS.text}; font-size: 14px; border-bottom: 1px solid #e5e7eb;">${params.disputeReason}</td>
+                            </tr>
+                            <tr>
+                              <td style="color: ${COLORS.textMuted}; font-size: 14px; border-bottom: 1px solid #e5e7eb;"><strong>Donor Email:</strong></td>
+                              <td style="color: ${COLORS.text}; font-size: 14px; border-bottom: 1px solid #e5e7eb;">${params.donorEmail}</td>
+                            </tr>
+                            <tr>
+                              <td style="color: ${COLORS.textMuted}; font-size: 14px; border-bottom: 1px solid #e5e7eb;"><strong>Donor Name:</strong></td>
+                              <td style="color: ${COLORS.text}; font-size: 14px; border-bottom: 1px solid #e5e7eb;">${params.donorName}</td>
+                            </tr>
+                            <tr>
+                              <td style="color: ${COLORS.textMuted}; font-size: 14px; border-bottom: 1px solid #e5e7eb;"><strong>Receipt #:</strong></td>
+                              <td style="color: ${COLORS.text}; font-size: 14px; border-bottom: 1px solid #e5e7eb;">${params.receiptNumber}</td>
+                            </tr>
+                            <tr>
+                              <td style="color: ${COLORS.textMuted}; font-size: 14px; border-bottom: 1px solid #e5e7eb;"><strong>Dispute ID:</strong></td>
+                              <td style="color: ${COLORS.text}; font-size: 14px; border-bottom: 1px solid #e5e7eb;">${params.disputeId}</td>
+                            </tr>
+                            <tr>
+                              <td style="color: ${COLORS.textMuted}; font-size: 14px;"><strong>Response Due:</strong></td>
+                              <td style="color: ${COLORS.danger}; font-size: 14px; font-weight: bold;">${params.disputeDueDate}</td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                    </table>
+                    
+                    <table width="100%" cellpadding="0" cellspacing="0" style="margin-top: 25px;">
+                      <tr>
+                        <td align="center">
+                          <a href="https://dashboard.stripe.com/disputes/${params.disputeId}" 
+                             style="display: inline-block; 
+                                    background-color: ${COLORS.danger}; 
+                                    color: #ffffff; 
+                                    text-decoration: none; 
+                                    padding: 16px 40px; 
+                                    border-radius: 8px; 
+                                    font-size: 18px; 
+                                    font-weight: bold;">
+                            Respond to Dispute in Stripe
+                          </a>
+                        </td>
+                      </tr>
+                    </table>
+                    
+                    <div style="background-color: #fef3c7; border-left: 4px solid ${COLORS.warning}; padding: 15px; margin: 25px 0; border-radius: 4px;">
+                      <p style="color: #92400e; font-size: 14px; margin: 0; font-weight: bold;">⚠️ Important Notes:</p>
+                      <ul style="color: #92400e; font-size: 14px; margin: 10px 0 0 0; padding-left: 20px;">
+                        <li>Gather all evidence: receipts, communication logs, delivery proof</li>
+                        <li>Respond promptly - late responses are automatically lost</li>
+                        <li>Stripe charges a $25 AUD dispute fee regardless of outcome</li>
+                        <li>Check if this is part of a recurring subscription</li>
+                      </ul>
+                    </div>
+                  </td>
+                </tr>
+                
+                <tr>
+                  <td style="background-color: ${COLORS.footerBackground}; padding: 20px; text-align: center; border-top: 1px solid #e5e7eb;">
+                    <p style="color: ${COLORS.textMuted}; font-size: 12px; margin: 0;">Al Ansar Masjid - Stripe Dispute Alert</p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </body>
+    </html>
+  `;
+}
+
+// ============================================================================
 // EMAIL SENDING HELPER
 // ============================================================================
 
