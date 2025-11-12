@@ -1,6 +1,7 @@
 import * as admin from "firebase-admin";
 import { logger } from "firebase-functions";
 import { Coordinates, CalculationMethod, PrayerTimes as AdhanPrayerTimes } from "adhan";
+import { getSydneyDate } from "../utils/dateHelpers";
 
 interface MosqueSettings {
   latitude: number;
@@ -52,16 +53,7 @@ export async function calculateAndUpdatePrayerTimes(
     };
 
     // Get current date in Sydney timezone (YYYY-MM-DD format)
-    const sydneyDate = new Date()
-      .toLocaleString("en-AU", {
-        timeZone: "Australia/Sydney",
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-      })
-      .split("/")
-      .reverse()
-      .join("-"); // Convert DD/MM/YYYY to YYYY-MM-DD
+    const sydneyDate = getSydneyDate();
 
     // Get prayer times document reference
     const prayerTimesRef = admin

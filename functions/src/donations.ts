@@ -7,23 +7,10 @@ import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { logger } from "firebase-functions";
 import * as admin from "firebase-admin";
 import Stripe from "stripe";
+import { getSydneyDate } from "./utils/dateHelpers";
 
 // NOTE: Stripe is initialized lazily in each function to ensure secrets are available
 const db = admin.firestore();
-
-// Sydney timezone helper
-const getSydneyDate = (): string => {
-  return new Date()
-    .toLocaleDateString("en-AU", {
-      timeZone: "Australia/Sydney",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    })
-    .split("/")
-    .reverse()
-    .join("-"); // Convert to YYYY-MM-DD
-};
 
 // ============================================================================
 // FUNCTION 1: Create Payment Intent (One-Time Donation)
