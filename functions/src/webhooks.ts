@@ -13,20 +13,6 @@ import { generateReceiptNumber } from "./donations";
 
 const db = admin.firestore();
 
-// Sydney timezone helper
-const getSydneyDate = (): string => {
-  return new Date()
-    .toLocaleDateString("en-AU", {
-      timeZone: "Australia/Sydney",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    })
-    .split("/")
-    .reverse()
-    .join("-");
-};
-
 // Calculate next payment date based on frequency
 const calculateNextPaymentDate = (frequency: string): string => {
   const now = new Date();
@@ -257,7 +243,7 @@ async function handlePaymentIntentSucceeded(
       donor_message: metadata.donor_message || null,
 
       // Timestamps
-      date: getSydneyDate(),
+      date: admin.firestore.FieldValue.serverTimestamp(),
       created_at: admin.firestore.FieldValue.serverTimestamp(),
       completed_at: admin.firestore.FieldValue.serverTimestamp(),
       updated_at: admin.firestore.FieldValue.serverTimestamp(),
@@ -426,7 +412,7 @@ async function handleInvoicePaymentSucceeded(
       recurring_frequency: metadata.frequency,
 
       // Timestamps
-      date: getSydneyDate(),
+      date: admin.firestore.FieldValue.serverTimestamp(),
       created_at: admin.firestore.FieldValue.serverTimestamp(),
       completed_at: admin.firestore.FieldValue.serverTimestamp(),
       updated_at: admin.firestore.FieldValue.serverTimestamp(),
