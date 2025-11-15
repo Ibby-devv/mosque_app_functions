@@ -51,17 +51,8 @@ export async function calculateAndUpdatePrayerTimes(
       });
     };
 
-    // Get current date in Sydney timezone (YYYY-MM-DD format)
-    const sydneyDate = new Date()
-      .toLocaleString("en-AU", {
-        timeZone: "Australia/Sydney",
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-      })
-      .split("/")
-      .reverse()
-      .join("-"); // Convert DD/MM/YYYY to YYYY-MM-DD
+    // Get current timestamp in Sydney timezone
+    const sydneyTimestamp = admin.firestore.Timestamp.now();
 
     // Get prayer times document reference
     const prayerTimesRef = admin
@@ -82,7 +73,7 @@ export async function calculateAndUpdatePrayerTimes(
       asr_adhan: formatTime(adhanPrayerTimes.asr),
       maghrib_adhan: formatTime(adhanPrayerTimes.maghrib),
       isha_adhan: formatTime(adhanPrayerTimes.isha),
-      last_updated: sydneyDate,
+      last_updated: sydneyTimestamp,
     });
 
     logger.info("✅ Prayer times calculated and updated successfully", {
@@ -92,7 +83,7 @@ export async function calculateAndUpdatePrayerTimes(
       asr: formatTime(adhanPrayerTimes.asr),
       maghrib: formatTime(adhanPrayerTimes.maghrib),
       isha: formatTime(adhanPrayerTimes.isha),
-      date: sydneyDate,
+      lastUpdated: sydneyTimestamp.toDate().toISOString(),
     });
   } catch (error) {
     logger.error("❌ Error calculating prayer times", error);

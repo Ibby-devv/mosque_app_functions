@@ -11,20 +11,6 @@ import Stripe from "stripe";
 // NOTE: Stripe is initialized lazily in each function to ensure secrets are available
 const db = admin.firestore();
 
-// Sydney timezone helper
-const getSydneyDate = (): string => {
-  return new Date()
-    .toLocaleDateString("en-AU", {
-      timeZone: "Australia/Sydney",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    })
-    .split("/")
-    .reverse()
-    .join("-"); // Convert to YYYY-MM-DD
-};
-
 // ============================================================================
 // FUNCTION 1: Create Payment Intent (One-Time Donation)
 // ============================================================================
@@ -299,7 +285,17 @@ export const cancelSubscription = onCall(
 
 export const generateReceiptNumber = async (): Promise<string> => {
   const counterRef = db.collection("receiptCounter").doc("current");
-  const sydneyDate = getSydneyDate();
+  const now = new Date();
+  const sydneyDate = now
+    .toLocaleDateString("en-AU", {
+      timeZone: "Australia/Sydney",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    })
+    .split("/")
+    .reverse()
+    .join("-"); // Convert DD/MM/YYYY to YYYY-MM-DD for year extraction
   const currentYear = parseInt(sydneyDate.split("-")[0]);
 
   try {
@@ -329,7 +325,7 @@ export const generateReceiptNumber = async (): Promise<string> => {
       transaction.set(counterRef, {
         year: currentYear,
         last_number: newNumber,
-        last_updated: sydneyDate,
+        last_updated: admin.firestore.FieldValue.serverTimestamp(),
       });
 
       return receiptNumber;
