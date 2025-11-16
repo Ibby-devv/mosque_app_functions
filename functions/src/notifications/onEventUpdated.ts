@@ -7,7 +7,7 @@ import { onDocumentUpdated } from "firebase-functions/v2/firestore";
 import { logger } from "firebase-functions";
 import * as admin from "firebase-admin";
 import { getActiveTokens, cleanupInvalidTokens } from "../utils/tokenCleanup";
-import { buildDataOnlyMessage } from "../utils/messagingHelpers";
+import { buildDataOnlyMessage, timestampToString } from "../utils/messagingHelpers";
 
 export const onEventUpdated = onDocumentUpdated(
   {
@@ -30,7 +30,7 @@ export const onEventUpdated = onDocumentUpdated(
       });
 
       // Check if event is in the past - don't notify for past events
-      const eventDate = after.date || after.start_date || "";
+      const eventDate = timestampToString(after.date || after.start_date);
       if (eventDate) {
         const today = new Date().toLocaleString('en-AU', {
           timeZone: 'Australia/Sydney',

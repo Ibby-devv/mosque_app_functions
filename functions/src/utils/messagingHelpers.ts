@@ -6,6 +6,23 @@
 import * as admin from "firebase-admin";
 
 /**
+ * Convert a Firestore Timestamp to an ISO 8601 string
+ * Returns empty string if value is null/undefined
+ * Returns value as-is if already a string
+ */
+export function timestampToString(value: any): string {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (value instanceof admin.firestore.Timestamp) {
+    return value.toDate().toISOString();
+  }
+  if (typeof value === "object" && value.toDate && typeof value.toDate === "function") {
+    return value.toDate().toISOString();
+  }
+  return String(value);
+}
+
+/**
  * Build FCM message payload with proper configuration for data-only messages
  * 
  * IMPORTANT: For data-only messages to trigger background handlers on Android/iOS:
