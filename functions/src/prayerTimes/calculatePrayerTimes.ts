@@ -51,7 +51,7 @@ export async function calculateAndUpdatePrayerTimes(
       });
     };
 
-    // Get current timestamp in Sydney timezone
+    // Get current server timestamp
     const sydneyTimestamp = admin.firestore.Timestamp.now();
 
     // Get prayer times document reference
