@@ -7,7 +7,7 @@ import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { logger } from "firebase-functions";
 import * as admin from "firebase-admin";
 import { getActiveTokens, cleanupInvalidTokens } from "../utils/tokenCleanup";
-import { buildDataOnlyMessage } from "../utils/messagingHelpers";
+import { buildDataOnlyMessage, timestampToString } from "../utils/messagingHelpers";
 import { isTmpUrl, moveToLive } from "../utils/imageHelpers";
 
 interface SendCustomNotificationRequest {
@@ -135,7 +135,7 @@ export const sendCustomNotification = onCall(
       const stringData: Record<string, string> = Object.fromEntries(
         Object.entries(notificationData).map(([key, value]) => [
           key,
-          value === undefined || value === null ? "" : String(value),
+          timestampToString(value),
         ])
       );
 

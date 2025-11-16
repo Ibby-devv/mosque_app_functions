@@ -6,31 +6,20 @@
 import * as admin from "firebase-admin";
 
 /**
- * Serialize any Timestamp objects in an object to ISO 8601 strings
- * This ensures FCM data payloads only contain string values
- * 
- * @param data Object that may contain Timestamp fields
- * @returns Object with Timestamps converted to ISO strings
+ * Convert a Firestore Timestamp to an ISO 8601 string
+ * Returns empty string if value is null/undefined
+ * Returns value as-is if already a string
  */
-export function serializeTimestamps(data: Record<string, any>): Record<string, string> {
-  const serialized: Record<string, string> = {};
-  
-  for (const [key, value] of Object.entries(data)) {
-    if (value === undefined || value === null) {
-      serialized[key] = "";
-    } else if (value instanceof admin.firestore.Timestamp) {
-      // Convert Timestamp to ISO 8601 string
-      serialized[key] = value.toDate().toISOString();
-    } else if (typeof value === "object" && value.toDate && typeof value.toDate === "function") {
-      // Handle Timestamp-like objects (duck typing)
-      serialized[key] = value.toDate().toISOString();
-    } else {
-      // Convert everything else to string
-      serialized[key] = String(value);
-    }
+export function timestampToString(value: any): string {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (value instanceof admin.firestore.Timestamp) {
+    return value.toDate().toISOString();
   }
-  
-  return serialized;
+  if (typeof value === "object" && value.toDate && typeof value.toDate === "function") {
+    return value.toDate().toISOString();
+  }
+  return String(value);
 }
 
 /**
@@ -41,15 +30,10 @@ export function serializeTimestamps(data: Record<string, any>): Record<string, s
  * - iOS: Must set content-available: true + proper APNs headers
  * 
  * This ensures background message handlers are invoked when app is backgrounded/quit.
- * 
- * NOTE: Automatically serializes any Timestamp objects to ISO strings
  */
-export function buildDataOnlyMessage(data: Record<string, any>, tokens: string[]): admin.messaging.MulticastMessage {
-  // Serialize any Timestamp objects to strings
-  const serializedData = serializeTimestamps(data);
-  
+export function buildDataOnlyMessage(data: Record<string, string>, tokens: string[]): admin.messaging.MulticastMessage {
   return {
-    data: serializedData,
+    data,
     tokens,
     // Android configuration
     android: {
@@ -73,24 +57,19 @@ export function buildDataOnlyMessage(data: Record<string, any>, tokens: string[]
 /**
  * Build FCM message with notification payload (shows system notification)
  * Use this when you want Android/iOS to display the notification automatically
- * 
- * NOTE: Automatically serializes any Timestamp objects to ISO strings
  */
 export function buildNotificationMessage(
   title: string,
   body: string,
-  data: Record<string, any>,
+  data: Record<string, string>,
   tokens: string[]
 ): admin.messaging.MulticastMessage {
-  // Serialize any Timestamp objects to strings
-  const serializedData = serializeTimestamps(data);
-  
   return {
     notification: {
       title,
       body,
     },
-    data: serializedData,
+    data,
     tokens,
     android: {
       priority: 'high',

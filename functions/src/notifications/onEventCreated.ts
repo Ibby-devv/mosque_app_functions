@@ -7,7 +7,7 @@ import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import { logger } from "firebase-functions";
 import * as admin from "firebase-admin";
 import { getActiveTokens, cleanupInvalidTokens } from "../utils/tokenCleanup";
-import { buildDataOnlyMessage } from "../utils/messagingHelpers";
+import { buildDataOnlyMessage, timestampToString } from "../utils/messagingHelpers";
 
 export const onEventCreated = onDocumentCreated(
   {
@@ -37,7 +37,7 @@ export const onEventCreated = onDocumentCreated(
       }
 
       // Format date if available
-      const eventDate = eventData.date || eventData.start_date || "";
+      const eventDate = timestampToString(eventData.date || eventData.start_date);
       const dateStr = eventDate ? ` - ${eventDate}` : "";
 
       // Send notification to all tokens
