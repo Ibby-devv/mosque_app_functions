@@ -23,14 +23,17 @@ To enable automatic deployment, you need to configure the following secret in yo
 
 This secret should contain the Firebase service account JSON key.
 
-#### How to create and configure:
+> **Note:** The service account is already set up on the mosque dashboard project. You just need to add it as a GitHub secret.
 
-1. **Generate a Firebase Service Account Key:**
-   - Go to [Firebase Console](https://console.firebase.google.com/)
-   - Select your project (`al-madina-masjid-app`)
-   - Go to Project Settings → Service Accounts
-   - Click "Generate New Private Key"
-   - Save the JSON file securely
+#### How to configure:
+
+1. **Obtain the Firebase Service Account Key:**
+   - If you have the existing service account JSON file from the mosque dashboard project, use that
+   - Otherwise, you can download it from [Firebase Console](https://console.firebase.google.com/):
+     - Select your project (`al-madina-masjid-app`)
+     - Go to Project Settings → Service Accounts
+     - Click "Generate New Private Key" (or use existing key if available)
+     - Save the JSON file securely
 
 2. **Add the secret to GitHub:**
    - Go to your GitHub repository settings
