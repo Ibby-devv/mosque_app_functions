@@ -46,7 +46,9 @@ export const onEventUpdated = onDocumentUpdated(
       }
       
       // Format event date for notification
-      const eventDate = timestampToString(after.date || after.start_date);
+      // Format event date for notification (date only, no time)
+      const eventDateFull = timestampToString(after.date || after.start_date);
+      const eventDate = eventDateFull.split(' ')[0];
 
       // Track significant changes
       const changes: string[] = [];
@@ -67,16 +69,16 @@ export const onEventUpdated = onDocumentUpdated(
           changes.push("Event has been reactivated");
           notificationBody = `${after.title} has been reactivated`;
           if (after.date && after.time) {
-            notificationBody += ` - ${after.date} at ${after.time}`;
+            notificationBody += ` - ${eventDate} at ${after.time}`;
           }
         }
       }
 
       // Date change
       if (before.date !== after.date) {
-        changes.push(`Date: ${before.date} → ${after.date}`);
+        changes.push(`Date: ${timestampToString(before.date).split(' ')[0]} → ${eventDate}`);
         if (!notificationBody) {
-          notificationBody = `${after.title} rescheduled to ${after.date}`;
+          notificationBody = `${after.title} rescheduled to ${eventDate}`;
           if (after.time) {
             notificationBody += ` at ${after.time}`;
           }
@@ -89,7 +91,7 @@ export const onEventUpdated = onDocumentUpdated(
         if (!notificationBody && after.time) {
           notificationBody = `${after.title} time changed to ${after.time}`;
           if (after.date) {
-            notificationBody += ` on ${after.date}`;
+            notificationBody += ` on ${eventDate}`;
           }
         }
       }
