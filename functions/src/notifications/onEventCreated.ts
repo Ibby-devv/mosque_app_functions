@@ -36,9 +36,9 @@ export const onEventCreated = onDocumentCreated(
         return;
       }
 
-      // Format date if available
+      // Format date/time if available
       const eventDate = timestampToString(eventData.date || eventData.start_date);
-      const dateStr = eventDate ? ` - ${eventDate}` : "";
+      const dateStr = eventDate ? ` on ${eventDate}` : "";
 
       // Send notification to all tokens
       // NOTE: Sending data-only message (no notification field) so the app

@@ -6,20 +6,34 @@
 import * as admin from "firebase-admin";
 
 /**
- * Convert a Firestore Timestamp to an ISO 8601 string
+ * Convert a Firestore Timestamp to DD/MM/YYYY HH:MM format (Australian format)
  * Returns empty string if value is null/undefined
  * Returns value as-is if already a string
  */
 export function timestampToString(value: any): string {
   if (!value) return "";
   if (typeof value === "string") return value;
+  
+  let date: Date;
+  
   if (value instanceof admin.firestore.Timestamp) {
-    return value.toDate().toISOString();
+    date = value.toDate();
+  } else if (typeof value === "object" && value.toDate && typeof value.toDate === "function") {
+    date = value.toDate();
+  } else {
+    return String(value);
   }
-  if (typeof value === "object" && value.toDate && typeof value.toDate === "function") {
-    return value.toDate().toISOString();
-  }
-  return String(value);
+  
+  // Format as DD/MM/YYYY HH:MM in Australia/Sydney timezone
+  const sydneyDate = new Date(date.toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
+  
+  const day = String(sydneyDate.getDate()).padStart(2, '0');
+  const month = String(sydneyDate.getMonth() + 1).padStart(2, '0');
+  const year = sydneyDate.getFullYear();
+  const hours = String(sydneyDate.getHours()).padStart(2, '0');
+  const minutes = String(sydneyDate.getMinutes()).padStart(2, '0');
+  
+  return `${day}/${month}/${year} ${hours}:${minutes}`;
 }
 
 /**

@@ -30,22 +30,23 @@ export const onEventUpdated = onDocumentUpdated(
       });
 
       // Check if event is in the past - don't notify for past events
-      const eventDate = timestampToString(after.date || after.start_date);
-      if (eventDate) {
-        const today = new Date().toLocaleString('en-AU', {
-          timeZone: 'Australia/Sydney',
-          year: 'numeric',
-          month: '2-digit',
-          day: '2-digit',
-        });
-        const [day, month, year] = today.split('/');
-        const todayFormatted = `${year}-${month}-${day}`;
+      if (after.date || after.start_date) {
+        const eventTimestamp = after.date || after.start_date;
+        const eventDate = eventTimestamp.toDate();
+        const today = new Date();
         
-        if (eventDate < todayFormatted) {
+        // Compare dates (ignore time)
+        eventDate.setHours(0, 0, 0, 0);
+        today.setHours(0, 0, 0, 0);
+        
+        if (eventDate < today) {
           logger.info("Event is in the past, skipping notification");
           return;
         }
       }
+      
+      // Format event date for notification
+      const eventDate = timestampToString(after.date || after.start_date);
 
       // Track significant changes
       const changes: string[] = [];
