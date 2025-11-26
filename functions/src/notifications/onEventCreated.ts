@@ -36,9 +36,17 @@ export const onEventCreated = onDocumentCreated(
         return;
       }
 
-      // Format date/time if available
-      const eventDate = timestampToString(eventData.date || eventData.start_date);
-      const dateStr = eventDate ? ` on ${eventDate}` : "";
+      // Format date/time:
+      // Prefer human-entered time string combined with mosque-local date to avoid TZ drift
+      // When `time` is present, pair it with DATE-ONLY string (no time from `date`)
+      let when: string;
+      if (eventData.time) {
+        const dateFull = await timestampToString(eventData.date);
+        const dateOnly = dateFull.split(" ")[0];
+        when = `${eventData.time} on ${dateOnly}`;
+      } else {
+        when = await timestampToString(eventData.start_date || eventData.date);
+      }
 
       // Send notification to all tokens
       // NOTE: Sending data-only message (no notification field) so the app
@@ -46,10 +54,10 @@ export const onEventCreated = onDocumentCreated(
       const messageData = {
         type: "event",
         eventId: event.params.eventId,
-        title: "🕌 New Event",
-        body: `${eventData.title}${dateStr}`,
+        title: eventData.title || "🕌 New Event",
+        body: eventData.location ? `${when} at ${eventData.location}` : when,
         eventTitle: eventData.title || "",
-        date: eventDate,
+        date: when,
         imageUrl: eventData.image_url || "",
       };
 

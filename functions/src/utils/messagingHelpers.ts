@@ -5,12 +5,42 @@
 
 import * as admin from "firebase-admin";
 
+// Cache for mosque timezone setting
+let cachedMosqueTimezone: string | null = null;
+
 /**
- * Convert a Firestore Timestamp to DD/MM/YYYY HH:MM format (Australian format)
+ * Get mosque timezone from Firestore settings (with caching)
+ * Falls back to Australia/Sydney if not configured
+ */
+async function getMosqueTimezone(): Promise<string> {
+  if (cachedMosqueTimezone) {
+    return cachedMosqueTimezone;
+  }
+
+  try {
+    const db = admin.firestore();
+    const settingsDoc = await db.collection('mosqueSettings').doc('info').get();
+    const timezone = settingsDoc.data()?.timezone;
+    
+    if (timezone && typeof timezone === 'string') {
+      cachedMosqueTimezone = timezone;
+      return timezone;
+    }
+  } catch (error) {
+    console.warn('Could not fetch mosque timezone, using default:', error);
+  }
+
+  // Default fallback
+  cachedMosqueTimezone = 'Australia/Sydney';
+  return cachedMosqueTimezone;
+}
+
+/**
+ * Convert a Firestore Timestamp to DD/MM/YYYY HH:MM format in mosque timezone
  * Returns empty string if value is null/undefined
  * Returns value as-is if already a string
  */
-export function timestampToString(value: any): string {
+export async function timestampToString(value: any): Promise<string> {
   if (!value) return "";
   if (typeof value === "string") return value;
   
@@ -24,16 +54,28 @@ export function timestampToString(value: any): string {
     return String(value);
   }
   
-  // Format as DD/MM/YYYY HH:MM in Australia/Sydney timezone
-  const sydneyDate = new Date(date.toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
+  // Get mosque timezone from settings
+  const mosqueTimezone = await getMosqueTimezone();
   
-  const day = String(sydneyDate.getDate()).padStart(2, '0');
-  const month = String(sydneyDate.getMonth() + 1).padStart(2, '0');
-  const year = sydneyDate.getFullYear();
-  const hours = String(sydneyDate.getHours()).padStart(2, '0');
-  const minutes = String(sydneyDate.getMinutes()).padStart(2, '0');
+  // Format as DD/MM/YYYY HH:MM in mosque timezone
+  const formatter = new Intl.DateTimeFormat('en-AU', {
+    timeZone: mosqueTimezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  });
   
-  return `${day}/${month}/${year} ${hours}:${minutes}`;
+  const parts = formatter.formatToParts(date);
+  const day = parts.find(p => p.type === 'day')?.value || '';
+  const month = parts.find(p => p.type === 'month')?.value || '';
+  const year = parts.find(p => p.type === 'year')?.value || '';
+  const hour = parts.find(p => p.type === 'hour')?.value || '';
+  const minute = parts.find(p => p.type === 'minute')?.value || '';
+  
+  return `${day}/${month}/${year} ${hour}:${minute}`;
 }
 
 /**

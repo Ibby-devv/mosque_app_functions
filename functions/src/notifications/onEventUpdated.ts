@@ -47,7 +47,7 @@ export const onEventUpdated = onDocumentUpdated(
       
       // Format event date for notification
       // Format event date for notification (date only, no time)
-      const eventDateFull = timestampToString(after.date || after.start_date);
+      const eventDateFull = await timestampToString(after.date || after.start_date);
       const eventDate = eventDateFull.split(' ')[0];
 
       // Track significant changes
@@ -76,7 +76,9 @@ export const onEventUpdated = onDocumentUpdated(
 
       // Date change
       if (before.date !== after.date) {
-        changes.push(`Date: ${timestampToString(before.date).split(' ')[0]} → ${eventDate}`);
+        const beforeDateFull = await timestampToString(before.date);
+        const beforeDate = beforeDateFull.split(' ')[0];
+        changes.push(`Date: ${beforeDate} → ${eventDate}`);
         if (!notificationBody) {
           notificationBody = `${after.title} rescheduled to ${eventDate}`;
           if (after.time) {
@@ -139,7 +141,7 @@ export const onEventUpdated = onDocumentUpdated(
       const messageData = {
         type: "event",
         eventId: event.params.eventId,
-        title: "📝 Event Updated",
+        title: after.title || "📝 Event Updated",
         body: notificationBody,
         eventTitle: after.title || "",
         date: eventDate,

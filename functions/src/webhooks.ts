@@ -26,29 +26,84 @@ import {
 
 const db = admin.firestore();
 
-// Calculate next payment date based on frequency
-const calculateNextPaymentDate = (frequency: string): string => {
+// Get mosque timezone from settings (with cache)
+let cachedMosqueTimezone: string | null = null;
+const getMosqueTimezone = async (): Promise<string> => {
+  if (cachedMosqueTimezone) return cachedMosqueTimezone;
+  
+  try {
+    const settingsDoc = await db.collection('mosqueSettings').doc('info').get();
+    const timezone = settingsDoc.data()?.timezone;
+    if (timezone && typeof timezone === 'string') {
+      cachedMosqueTimezone = timezone;
+      return timezone;
+    }
+  } catch (error) {
+    logger.warn('Could not fetch mosque timezone, using default', error);
+  }
+  
+  // Default fallback
+  cachedMosqueTimezone = 'Australia/Sydney';
+  return cachedMosqueTimezone;
+};
+
+// Get current date string in mosque timezone (YYYY-MM-DD format)
+const getMosqueDateString = async (): Promise<string> => {
+  const timezone = await getMosqueTimezone();
   const now = new Date();
-  const sydneyTime = new Date(
-    now.toLocaleString("en-US", { timeZone: "Australia/Sydney" })
-  );
+  
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(now);
+  
+  const year = parts.find(p => p.type === 'year')?.value;
+  const month = parts.find(p => p.type === 'month')?.value;
+  const day = parts.find(p => p.type === 'day')?.value;
+  
+  return `${year}-${month}-${day}`;
+};
+
+// Calculate next payment date based on frequency
+const calculateNextPaymentDate = async (frequency: string): Promise<string> => {
+  const timezone = await getMosqueTimezone();
+  const now = new Date();
+  
+  // Get current date parts in mosque timezone
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+  }).formatToParts(now);
+  
+  const year = parseInt(parts.find(p => p.type === 'year')?.value || '0');
+  const month = parseInt(parts.find(p => p.type === 'month')?.value || '1') - 1;
+  const day = parseInt(parts.find(p => p.type === 'day')?.value || '1');
+  
+  const mosqueDate = new Date(year, month, day);
 
   switch (frequency) {
     case "weekly":
-      sydneyTime.setDate(sydneyTime.getDate() + 7);
+      mosqueDate.setDate(mosqueDate.getDate() + 7);
       break;
     case "fortnightly":
-      sydneyTime.setDate(sydneyTime.getDate() + 14);
+      mosqueDate.setDate(mosqueDate.getDate() + 14);
       break;
     case "monthly":
-      sydneyTime.setMonth(sydneyTime.getMonth() + 1);
+      mosqueDate.setMonth(mosqueDate.getMonth() + 1);
       break;
     case "yearly":
-      sydneyTime.setFullYear(sydneyTime.getFullYear() + 1);
+      mosqueDate.setFullYear(mosqueDate.getFullYear() + 1);
       break;
   }
 
-  return sydneyTime.toISOString().split("T")[0]; // YYYY-MM-DD
+  const y = mosqueDate.getFullYear();
+  const m = String(mosqueDate.getMonth() + 1).padStart(2, '0');
+  const d = String(mosqueDate.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
 };
 
 // ============================================================================
@@ -353,7 +408,7 @@ async function handleCheckoutOneTime(
       receipt_sent_at: null,
 
       // Timestamps
-      date: getSydneyDate(),
+      date: await getMosqueDateString(),
       created_at: admin.firestore.FieldValue.serverTimestamp(),
       completed_at: admin.firestore.FieldValue.serverTimestamp(),
       updated_at: admin.firestore.FieldValue.serverTimestamp(),
@@ -382,7 +437,7 @@ async function handleCheckoutOneTime(
         amount: session.amount_total || 0,
         currency: session.currency || "aud",
         receiptNumber,
-        date: getSydneyDate(),
+        date: await getMosqueDateString(),
         donationType: metadata.donation_type_label || "General Donation",
         campaignName: metadata.campaign_name,
         cardLast4: paymentMethod?.card?.last4,
@@ -447,7 +502,7 @@ async function handleCheckoutSubscription(
     const customerName = session.customer_details?.name || metadata.donor_name || "Anonymous";
 
     // Calculate next payment date
-    const nextPaymentDate = calculateNextPaymentDate(metadata.frequency);
+    const nextPaymentDate = await calculateNextPaymentDate(metadata.frequency);
 
     // Subscription record is created by customer.subscription.created event
     // Here we just send the welcome email
@@ -678,7 +733,7 @@ async function handlePaymentIntentSucceeded(
         amount: paymentIntent.amount,
         currency: paymentIntent.currency,
         receiptNumber,
-        date: getSydneyDate(),
+        date: await getMosqueDateString(),
         donationType: metadata.donation_type_label || "General Donation",
         campaignName: metadata.campaign_name,
         cardLast4: paymentMethod?.card?.last4,
@@ -754,12 +809,10 @@ async function handleSubscriptionCreated(subscription: Stripe.Subscription) {
         frequency: metadata.frequency || "monthly",
 
         // Status
-        status: "active",
-        next_payment_date: calculateNextPaymentDate(
-          metadata.frequency || "monthly"
-        ),
-
-        // Donation details
+      status: "active",
+      next_payment_date: await calculateNextPaymentDate(
+        metadata.frequency || "monthly"
+      ),        // Donation details
         donation_type_id: metadata.donation_type_id || null,
         donation_type_label: metadata.donation_type_label || "General Donation",
         campaign_id: metadata.campaign_id || null,
@@ -793,7 +846,7 @@ async function handleSubscriptionCreated(subscription: Stripe.Subscription) {
       });
 
       // Compute next payment date based on frequency
-      const nextPaymentDate = calculateNextPaymentDate(
+      const nextPaymentDate = await calculateNextPaymentDate(
         metadata.frequency || "monthly"
       );
 
@@ -959,7 +1012,7 @@ async function handleInvoicePaymentSucceeded(
       .update({
         last_payment_at: admin.firestore.FieldValue.serverTimestamp(),
         last_payment_donation_id: donationRef.id,
-        next_payment_date: calculateNextPaymentDate(
+        next_payment_date: await calculateNextPaymentDate(
           metadata.frequency || "monthly"
         ),
       });
@@ -997,7 +1050,7 @@ async function handleInvoicePaymentSucceeded(
           return_url: "alansar://donations",
         });
 
-        const nextPaymentDate = calculateNextPaymentDate(
+        const nextPaymentDate = await calculateNextPaymentDate(
           metadata.frequency || "monthly"
         );
 
@@ -1007,7 +1060,7 @@ async function handleInvoicePaymentSucceeded(
             amount: invoice.amount_paid,
             currency: invoice.currency || "aud",
             receiptNumber,
-            date: getSydneyDate(),
+            date: await getMosqueDateString(),
             frequency: metadata.frequency || "monthly",
             donationType: metadata.donation_type_label || "General Donation",
             campaignName: undefined,
@@ -1287,7 +1340,7 @@ async function handleSubscriptionUpdated(
       currency: (subscription.currency || "aud").toUpperCase(),
       frequency: newFrequency,
       status: subscription.status,
-      next_payment_date: calculateNextPaymentDate(newFrequency),
+      next_payment_date: await calculateNextPaymentDate(newFrequency),
       updated_at: admin.firestore.FieldValue.serverTimestamp(),
     });
 
@@ -1339,7 +1392,7 @@ async function handleSubscriptionUpdated(
               <ul>
                 ${changesList.map((change) => `<li>${change}</li>`).join("")}
               </ul>
-              <p>Next payment: ${calculateNextPaymentDate(newFrequency)}</p>
+              <p>Next payment: ${await calculateNextPaymentDate(newFrequency)}</p>
               <p><a href="${portalSession.url}" style="display: inline-block; background: #1e3a8a; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px;">Manage Subscription</a></p>
               <p>JazakAllah Khair!</p>
             </body>
