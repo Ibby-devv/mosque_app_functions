@@ -18,10 +18,11 @@ export const getUserDonations = onCall(
     const normalizedEmail = email.toLowerCase().trim();
 
     try {
-      // Get one-time donations
+      // Get one-time donations (exclude recurring donation payments)
       const donationsSnapshot = await db
         .collection("donations")
         .where("donor_email", "==", normalizedEmail)
+        .where("is_recurring", "==", false)
         .orderBy("created_at", "desc")
         .get();
 
