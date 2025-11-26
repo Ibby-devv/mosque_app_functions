@@ -7,7 +7,7 @@ import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { logger } from "firebase-functions";
 import * as admin from "firebase-admin";
 import { getActiveTokens, cleanupInvalidTokens } from "../utils/tokenCleanup";
-import { buildDataOnlyMessage, timestampToString } from "../utils/messagingHelpers";
+import { buildNotificationMessage, timestampToString } from "../utils/messagingHelpers";
 import { isTmpUrl, moveToLive } from "../utils/imageHelpers";
 
 interface SendCustomNotificationRequest {
@@ -117,8 +117,8 @@ export const sendCustomNotification = onCall(
       }
 
       // Prepare notification data
-      // NOTE: Sending data-only message (no notification field) so the app
-      // can handle display with custom styling based on type
+      // NOTE: Sending hybrid message (notification + data) for reliable foreground delivery
+      // while maintaining custom styling capabilities via data field
       const notificationData = {
         type: data?.type || "general",
         title,
@@ -141,7 +141,7 @@ export const sendCustomNotification = onCall(
       const stringData: Record<string, string> = Object.fromEntries(stringDataEntries);
 
       // Send notification to all tokens with proper priority for background delivery
-      const message = buildDataOnlyMessage(stringData, tokens);
+      const message = buildNotificationMessage(title, body, stringData, tokens);
 
       const response = await admin.messaging().sendEachForMulticast(message);
 
