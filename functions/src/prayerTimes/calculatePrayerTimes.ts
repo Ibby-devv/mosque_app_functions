@@ -6,6 +6,7 @@ interface MosqueSettings {
   latitude: number;
   longitude: number;
   calculation_method?: string;
+  timezone?: string;
 }
 
 /**
@@ -41,13 +42,14 @@ export async function calculateAndUpdatePrayerTimes(
     const date = new Date();
     const adhanPrayerTimes = new AdhanPrayerTimes(coordinates, date, params);
 
-    // Convert Date objects to 12-hour format strings in Sydney timezone
+    // Convert Date objects to 12-hour format strings in mosque timezone
+    const mosqueTimezone = mosqueSettings.timezone || "Australia/Sydney";
     const formatTime = (date: Date): string => {
       return date.toLocaleTimeString("en-US", {
         hour: "numeric",
         minute: "2-digit",
         hour12: true,
-        timeZone: "Australia/Sydney",
+        timeZone: mosqueTimezone,
       });
     };
 

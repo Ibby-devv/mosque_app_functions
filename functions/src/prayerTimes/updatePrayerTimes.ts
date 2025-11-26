@@ -10,7 +10,7 @@ import { calculateAndUpdatePrayerTimes } from "./calculatePrayerTimes";
 export const updatePrayerTimes = onSchedule(
   {
     schedule: "0 0 * * *",
-    timeZone: "Australia/Sydney",
+    timeZone: "Australia/Sydney", // Schedule timezone - runs at midnight Sydney time
     region: "australia-southeast1",
   },
   async () => {
@@ -41,6 +41,7 @@ export const updatePrayerTimes = onSchedule(
         latitude: settings.latitude,
         longitude: settings.longitude,
         calculation_method: settings.calculation_method,
+        timezone: settings.timezone,
       });
 
       logger.info("✅ Daily prayer times update completed");

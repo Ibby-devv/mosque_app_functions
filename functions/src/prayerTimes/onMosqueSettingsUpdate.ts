@@ -6,6 +6,7 @@ interface MosqueSettings {
   latitude?: number;
   longitude?: number;
   calculation_method?: string;
+  timezone?: string;
 }
 
 /**
@@ -31,14 +32,18 @@ export const onMosqueSettingsUpdate = onDocumentUpdated(
       const methodChanged = before?.calculation_method !== after.calculation_method;
       const latitudeChanged = before?.latitude !== after.latitude;
       const longitudeChanged = before?.longitude !== after.longitude;
+      const timezoneChanged = before?.timezone !== after.timezone;
 
-      if (methodChanged || latitudeChanged || longitudeChanged) {
+      if (methodChanged || latitudeChanged || longitudeChanged || timezoneChanged) {
         logger.info("🔄 Mosque settings changed - recalculating prayer times", {
           methodChanged,
           latitudeChanged,
           longitudeChanged,
+          timezoneChanged,
           oldMethod: before?.calculation_method,
           newMethod: after.calculation_method,
+          oldTimezone: before?.timezone,
+          newTimezone: after.timezone,
         });
 
         // Validate that we have the required settings
@@ -52,6 +57,7 @@ export const onMosqueSettingsUpdate = onDocumentUpdated(
           latitude: after.latitude,
           longitude: after.longitude,
           calculation_method: after.calculation_method,
+          timezone: after.timezone,
         });
 
         logger.info("✅ Prayer times recalculated due to settings change");
