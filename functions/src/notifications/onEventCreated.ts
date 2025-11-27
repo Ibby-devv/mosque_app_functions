@@ -7,7 +7,7 @@ import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import { logger } from "firebase-functions";
 import * as admin from "firebase-admin";
 import { getActiveTokens, cleanupInvalidTokens } from "../utils/tokenCleanup";
-import { buildNotificationMessage, timestampToString } from "../utils/messagingHelpers";
+import { buildDataOnlyMessage, timestampToString } from "../utils/messagingHelpers";
 
 export const onEventCreated = onDocumentCreated(
   {
@@ -48,10 +48,8 @@ export const onEventCreated = onDocumentCreated(
         when = await timestampToString(eventData.start_date || eventData.date);
       }
 
-      // Send notification to all tokens
-      // NOTE: Sending hybrid message (notification + data) for reliable foreground delivery
-      // while maintaining custom styling capabilities via data field
-      const messageData = {
+      // Send data-only message for consistent Notifee styling across all app states
+      const messageData: Record<string, string> = {
         type: "event",
         eventId: event.params.eventId,
         title: eventData.title || "🕌 New Event",
@@ -61,12 +59,7 @@ export const onEventCreated = onDocumentCreated(
         imageUrl: eventData.image_url || "",
       };
 
-      const message = buildNotificationMessage(
-        messageData.title,
-        messageData.body,
-        messageData,
-        tokens
-      );
+      const message = buildDataOnlyMessage(messageData, tokens);
 
       const response = await admin.messaging().sendEachForMulticast(message);
 

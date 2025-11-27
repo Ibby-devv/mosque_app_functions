@@ -7,7 +7,7 @@ import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import { logger } from "firebase-functions";
 import * as admin from "firebase-admin";
 import { getActiveTokens, cleanupInvalidTokens } from "../utils/tokenCleanup";
-import { buildNotificationMessage } from "../utils/messagingHelpers";
+import { buildDataOnlyMessage } from "../utils/messagingHelpers";
 
 export const onCampaignCreated = onDocumentCreated(
   {
@@ -42,10 +42,8 @@ export const onCampaignCreated = onDocumentCreated(
         ? ` - Goal: $${(goalAmount / 100).toFixed(0)}`
         : "";
 
-      // Send notification to all tokens
-      // NOTE: Sending hybrid message (notification + data) for reliable foreground delivery
-      // while maintaining custom styling capabilities via data field
-      const messageData = {
+      // Send data-only message for consistent Notifee styling across all app states
+      const messageData: Record<string, string> = {
         type: "campaign",
         campaignId: event.params.campaignId,
         title: "💚 New Donation Campaign",
@@ -55,12 +53,7 @@ export const onCampaignCreated = onDocumentCreated(
         imageUrl: campaignData.image_url || "",
       };
 
-      const message = buildNotificationMessage(
-        messageData.title,
-        messageData.body,
-        messageData,
-        tokens
-      );
+      const message = buildDataOnlyMessage(messageData, tokens);
 
       const response = await admin.messaging().sendEachForMulticast(message);
 

@@ -7,7 +7,7 @@ import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { logger } from "firebase-functions";
 import * as admin from "firebase-admin";
 import { getActiveTokens, cleanupInvalidTokens } from "../utils/tokenCleanup";
-import { buildNotificationMessage, timestampToString } from "../utils/messagingHelpers";
+import { buildDataOnlyMessage, timestampToString } from "../utils/messagingHelpers";
 import { isTmpUrl, moveToLive } from "../utils/imageHelpers";
 
 interface SendCustomNotificationRequest {
@@ -116,9 +116,7 @@ export const sendCustomNotification = onCall(
         }
       }
 
-      // Prepare notification data
-      // NOTE: Sending hybrid message (notification + data) for reliable foreground delivery
-      // while maintaining custom styling capabilities via data field
+      // Send data-only message for consistent Notifee styling across all app states
       const notificationData = {
         type: data?.type || "general",
         title,
@@ -130,8 +128,7 @@ export const sendCustomNotification = onCall(
         ...data,
       };
 
-      // FCM requires data payload values to be strings. Ensure everything is stringified
-      // to avoid payload rejection and missing fields like imageUrl on certain devices.
+      // FCM requires data payload values to be strings
       const stringDataEntries = await Promise.all(
         Object.entries(notificationData).map(async ([key, value]) => [
           key,
@@ -140,8 +137,7 @@ export const sendCustomNotification = onCall(
       );
       const stringData: Record<string, string> = Object.fromEntries(stringDataEntries);
 
-      // Send notification to all tokens with proper priority for background delivery
-      const message = buildNotificationMessage(title, body, stringData, tokens);
+      const message = buildDataOnlyMessage(stringData, tokens);
 
       const response = await admin.messaging().sendEachForMulticast(message);
 
