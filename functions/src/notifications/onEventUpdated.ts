@@ -9,6 +9,27 @@ import * as admin from "firebase-admin";
 import { getActiveTokens, cleanupInvalidTokens } from "../utils/tokenCleanup";
 import { buildDataOnlyMessage, timestampToString } from "../utils/messagingHelpers";
 
+/**
+ * Get mosque timezone from Firestore settings (with caching)
+ * Falls back to Australia/Sydney if not configured
+ */
+async function getMosqueTimezone(): Promise<string> {
+  try {
+    const db = admin.firestore();
+    const settingsDoc = await db.collection('mosqueSettings').doc('info').get();
+    const timezone = settingsDoc.data()?.timezone;
+    
+    if (timezone && typeof timezone === 'string') {
+      return timezone;
+    }
+  } catch (error) {
+    logger.warn('Could not fetch mosque timezone, using default:', error);
+  }
+
+  // Default fallback
+  return 'Australia/Sydney';
+}
+
 export const onEventUpdated = onDocumentUpdated(
   {
     document: "events/{eventId}",
@@ -33,14 +54,40 @@ export const onEventUpdated = onDocumentUpdated(
       if (after.date || after.start_date) {
         const eventTimestamp = after.date || after.start_date;
         const eventDate = eventTimestamp.toDate();
-        const today = new Date();
         
-        // Compare dates (ignore time)
-        eventDate.setHours(0, 0, 0, 0);
-        today.setHours(0, 0, 0, 0);
+        // Get current time in mosque timezone
+        const mosqueTimezone = await getMosqueTimezone();
+        const nowInMosqueTimezone = new Date(new Date().toLocaleString("en-US", { timeZone: mosqueTimezone }));
         
-        if (eventDate < today) {
-          logger.info("Event is in the past, skipping notification");
+        // If event has a specific time, we need to parse it and compare with current time
+        // Otherwise just compare dates (for all-day events)
+        if (after.time && typeof after.time === 'string') {
+          // Parse time string (e.g., "14:30" or "2:30 PM")
+          const timeParts = after.time.match(/(\d+):(\d+)/);
+          if (timeParts) {
+            const hours = parseInt(timeParts[1], 10);
+            const minutes = parseInt(timeParts[2], 10);
+            
+            // Adjust for AM/PM if present
+            let adjustedHours = hours;
+            if (after.time.toLowerCase().includes('pm') && hours !== 12) {
+              adjustedHours = hours + 12;
+            } else if (after.time.toLowerCase().includes('am') && hours === 12) {
+              adjustedHours = 0;
+            }
+            
+            eventDate.setHours(adjustedHours, minutes, 0, 0);
+          }
+        } else {
+          // No specific time, compare dates only (set to end of day)
+          eventDate.setHours(23, 59, 59, 999);
+        }
+        
+        if (eventDate < nowInMosqueTimezone) {
+          logger.info("Event is in the past, skipping notification", {
+            eventDate: eventDate.toISOString(),
+            currentTime: nowInMosqueTimezone.toISOString(),
+          });
           return;
         }
       }
@@ -75,7 +122,7 @@ export const onEventUpdated = onDocumentUpdated(
       }
 
       // Date change
-      if (before.date !== after.date) {
+      if (before.date && after.date && before.date.toMillis() !== after.date.toMillis()) {
         const beforeDateFull = await timestampToString(before.date);
         const beforeDate = beforeDateFull.split(' ')[0];
         changes.push(`Date: ${beforeDate} → ${eventDate}`);
