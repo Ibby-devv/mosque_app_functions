@@ -51,8 +51,9 @@ export const DEFAULT_EMAIL_CONFIG: EmailConfig = {
   fromEmail: "donations@alansar.app",
   supportEmail: "donations@alansar.app",
   appDeepLink: "alansar://donations",
-  // Web URL that redirects to app - should be set up as a Firebase Hosting redirect
-  webRedirectUrl: "https://alansar.app/redirect",
+  // Return URL after Stripe portal - defaults to app deep link (simplest option)
+  // Override with STRIPE_PORTAL_RETURN_URL env var if you have a web redirect page
+  webRedirectUrl: "alansar://donations",
 };
 
 // ============================================================================

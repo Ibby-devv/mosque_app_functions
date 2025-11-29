@@ -39,16 +39,33 @@ Before sending emails in production:
 2. Configure DNS records (SPF, DKIM, DMARC) as instructed by Resend
 3. Ensure the `fromEmail` in your config uses the verified domain
 
-### 4. Web Redirect URL Setup
+### 4. Web Redirect URL Setup (Optional)
 
-The `webRedirectUrl` is used as the return URL for Stripe billing portal sessions. This URL should:
+The `webRedirectUrl` is **only used as the return URL for Stripe billing portal sessions** — this is where users land after they finish managing their subscription in Stripe's portal.
 
-1. Be a publicly accessible HTTPS URL
-2. Redirect users back to the app using the configured deep link
-3. Handle cases where the app isn't installed (e.g., show a download prompt)
+**You have two options:**
 
-Example Firebase Hosting redirect in `firebase.json`:
+#### Option A: Use App Deep Link Directly (Simplest)
+
+If you don't have a website, you can use your app's deep link directly as the return URL. Update `STRIPE_PORTAL_RETURN_URL` in your environment:
+
+```
+STRIPE_PORTAL_RETURN_URL=alansar://donations
+```
+
+Or update `webRedirectUrl` in `EmailLayout.tsx`:
+```typescript
+webRedirectUrl: "alansar://donations",
+```
+
+This works because the portal opens in a browser, and when it redirects to the deep link, the phone will open your app.
+
+#### Option B: Use a Web URL (If You Have a Website)
+
+If you have a website (e.g., via Firebase Hosting), you can set up a redirect page:
+
 ```json
+// firebase.json
 {
   "hosting": {
     "redirects": [
@@ -61,6 +78,8 @@ Example Firebase Hosting redirect in `firebase.json`:
   }
 }
 ```
+
+This approach allows you to handle cases where the app isn't installed (show a download prompt).
 
 ### 5. App Deep Link Configuration
 
