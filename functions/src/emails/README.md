@@ -2,6 +2,22 @@
 
 This module provides React Email-based templates and a centralized email sending service for the mosque app.
 
+## Previewing Email Templates
+
+You can preview all email templates in your browser using the React Email dev server:
+
+```bash
+cd functions
+npm install
+npm run email:dev
+```
+
+This starts a local server at `http://localhost:3000` where you can:
+- Browse all email templates
+- See live preview with sample data
+- View HTML source code
+- Test responsive layouts
+
 ## Setup Requirements
 
 ### 1. Environment Variables / Secrets
