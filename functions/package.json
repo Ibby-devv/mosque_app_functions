@@ -9,7 +9,7 @@
     "start": "npm run shell",
     "deploy": "firebase deploy --only functions",
     "logs": "firebase functions:log",
-    "email:dev": "react-email dev --dir emails --port 3000"
+    "email:dev": "npx react-email dev --dir emails --port 3000"
   },
   "engines": {
     "node": "20"
@@ -17,6 +17,7 @@
   "main": "lib/index.js",
   "dependencies": {
     "@react-email/components": "^0.5.7",
+    "@react-email/preview-server": "^5.0.5",
     "@react-email/render": "^1.4.0",
     "adhan": "^4.4.3",
     "axios": "^1.13.0",
