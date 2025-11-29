@@ -14,6 +14,7 @@ import {
 } from "../components/EmailLayout.js";
 import {
   AlertBox,
+  EmailButton,
   Greeting,
   Paragraph,
   SectionTitle,
@@ -62,6 +63,10 @@ export function ManagementLinkEmail({
         method, change donation amount, or cancel your subscription directly
         through the {emailConfig.mosqueShortName} app.
       </Paragraph>
+
+      <EmailButton href={emailConfig.appDeepLink}>
+        Open App to Manage Donations
+      </EmailButton>
 
       <AlertBox type="info" title="How to Manage Your Donations:">
         1. Open the {emailConfig.mosqueShortName} app on your device
