@@ -9,7 +9,7 @@
     "start": "npm run shell",
     "deploy": "firebase deploy --only functions",
     "logs": "firebase functions:log",
-    "email:dev": "email dev --dir src/emails/templates --port 3000"
+    "email:dev": "react-email dev --dir emails --port 3000"
   },
   "engines": {
     "node": "20"

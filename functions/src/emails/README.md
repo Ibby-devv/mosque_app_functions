@@ -13,10 +13,12 @@ npm run email:dev
 ```
 
 This starts a local server at `http://localhost:3000` where you can:
-- Browse all email templates
+- Browse all email templates in the sidebar
 - See live preview with sample data
 - View HTML source code
 - Test responsive layouts
+
+The preview templates are in the `/emails` folder and include sample data for each email type.
 
 ## Setup Requirements
 
