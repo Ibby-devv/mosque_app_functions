@@ -519,7 +519,7 @@ async function handleCheckoutSubscription(
       // NOTE: Portal sessions are no longer created here as URLs expire too quickly
       // Users should manage subscriptions through the app
 
-       const emailData = await recurringDonationWelcome({
+      const emailData = await recurringDonationWelcome({
         donorName: customerName,
         amount: subscription.items.data[0].price.unit_amount || 0,
         currency: subscription.currency || "aud",
@@ -836,7 +836,7 @@ async function handleSubscriptionCreated(subscription: Stripe.Subscription) {
       );
 
       if (metadata.donor_email) {
-         const emailData = await recurringDonationWelcome({
+        const emailData = await recurringDonationWelcome({
           donorName: metadata.donor_name || "Anonymous",
           amount: subscription.items.data[0].price.unit_amount || 0,
           currency: subscription.currency || "aud",

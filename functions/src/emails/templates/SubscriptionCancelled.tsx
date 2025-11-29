@@ -110,7 +110,7 @@ export function SubscriptionCancelledEmail({
       </Paragraph>
 
       <Paragraph>
-        You&apos;re always welcome to donate again at any time through our app.
+        You are always welcome to donate again at any time through our app.
       </Paragraph>
 
       <Text

@@ -8,7 +8,7 @@ import { logger } from "firebase-functions";
 import * as admin from "firebase-admin";
 import Stripe from "stripe";
 import { render } from "@react-email/render";
-import { getManagementLinkEmail, isValidEmail, normalizeEmail } from "./emails/index.js";
+import { getManagementLinkEmail, isValidEmail, normalizeEmail, DEFAULT_EMAIL_CONFIG } from "./emails/index.js";
 import { sendEmail } from "./utils/emailTemplates.js";
 
 const db = admin.firestore();
@@ -128,9 +128,8 @@ export const getSubscriptionPortalUrl = onCall(
       // Using a web URL that can redirect back to the app
       const portalSession = await stripe.billingPortal.sessions.create({
         customer: customerId,
-        // Use a web URL that handles the redirect properly
-        // This should be a Firebase Hosting URL or similar that can open the app
-        return_url: process.env.STRIPE_PORTAL_RETURN_URL || "https://alansar.app/redirect?to=donations",
+        // Use web redirect URL from config (or env override)
+        return_url: process.env.STRIPE_PORTAL_RETURN_URL || DEFAULT_EMAIL_CONFIG.webRedirectUrl,
       });
 
       logger.info("🔗 Portal session created for authenticated user", {

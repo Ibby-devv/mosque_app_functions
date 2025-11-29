@@ -68,13 +68,13 @@ export function ManagementLinkEmail({
         <br />
         2. Go to the Donations section
         <br />
-        3. Tap &quot;Manage Recurring Donations&quot;
+        3. Tap "Manage Recurring Donations"
         <br />
         4. Select the donation you want to update
       </AlertBox>
 
       <Paragraph style={{ fontSize: "14px" }}>
-        If you didn&apos;t request this email, you can safely ignore it. Your
+        If you did not request this email, you can safely ignore it. Your
         donation settings remain unchanged.
       </Paragraph>
 
