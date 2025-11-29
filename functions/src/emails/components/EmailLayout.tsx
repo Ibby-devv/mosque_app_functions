@@ -50,7 +50,7 @@ export const DEFAULT_EMAIL_CONFIG: EmailConfig = {
   mosqueShortName: "Al Ansar",
   fromEmail: "donations@alansar.app",
   supportEmail: "donations@alansar.app",
-  appDeepLink: "alansar://donations",
+  appDeepLink: "alansar://manage-donations",
   // Return URL after Stripe portal - defaults to app deep link (simplest option)
   // Override with STRIPE_PORTAL_RETURN_URL env var if you have a web redirect page
   webRedirectUrl: "alansar://donations",
