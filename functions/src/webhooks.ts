@@ -20,6 +20,9 @@ import {
   oneTimeDonationReceipt,
   recurringDonationWelcome,
   monthlyRecurringReceipt,
+  paymentFailedEmail,
+  subscriptionCancelledEmail,
+  refundConfirmationEmail,
   disputeAlertEmail,
   sendEmail,
 } from "./utils/emailTemplates";
@@ -432,7 +435,7 @@ async function handleCheckoutOneTime(
         receiptNumber,
       });
 
-      const emailData = oneTimeDonationReceipt({
+      const emailData = await oneTimeDonationReceipt({
         donorName: customerName,
         amount: session.amount_total || 0,
         currency: session.currency || "aud",
@@ -513,16 +516,10 @@ async function handleCheckoutSubscription(
     });
 
     if (customerEmail) {
-      // Create portal session for management
-      const portalSession = await stripe.billingPortal.sessions.create({
-        customer:
-          typeof subscription.customer === "string"
-            ? subscription.customer
-            : subscription.customer.id,
-        return_url: "alansar://donations",
-      });
+      // NOTE: Portal sessions are no longer created here as URLs expire too quickly
+      // Users should manage subscriptions through the app
 
-      const emailData = recurringDonationWelcome({
+       const emailData = await recurringDonationWelcome({
         donorName: customerName,
         amount: subscription.items.data[0].price.unit_amount || 0,
         currency: subscription.currency || "aud",
@@ -530,7 +527,7 @@ async function handleCheckoutSubscription(
         donationType: metadata.donation_type_label || "General Donation",
         campaignName: metadata.campaign_name,
         nextPaymentDate,
-        manageUrl: portalSession.url,
+        // NOTE: Portal URL removed - expires too quickly for email
       });
 
       await sendEmail({
@@ -728,7 +725,7 @@ async function handlePaymentIntentSucceeded(
         receiptNumber,
       });
 
-      const emailData = oneTimeDonationReceipt({
+      const emailData = await oneTimeDonationReceipt({
         donorName,
         amount: paymentIntent.amount,
         currency: paymentIntent.currency,
@@ -830,20 +827,8 @@ async function handleSubscriptionCreated(subscription: Stripe.Subscription) {
 
     // Also send welcome email (for non-Checkout flows)
     try {
-      const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
-        apiVersion: "2023-10-16",
-      });
-
-      const customerId =
-        typeof subscription.customer === "string"
-          ? subscription.customer
-          : subscription.customer.id;
-
-      // Create portal session for management
-      const portalSession = await stripe.billingPortal.sessions.create({
-        customer: customerId,
-        return_url: "alansar://donations",
-      });
+      // NOTE: Portal sessions are no longer created here as URLs expire too quickly
+      // Users should manage subscriptions through the app
 
       // Compute next payment date based on frequency
       const nextPaymentDate = await calculateNextPaymentDate(
@@ -851,7 +836,7 @@ async function handleSubscriptionCreated(subscription: Stripe.Subscription) {
       );
 
       if (metadata.donor_email) {
-        const emailData = recurringDonationWelcome({
+         const emailData = await recurringDonationWelcome({
           donorName: metadata.donor_name || "Anonymous",
           amount: subscription.items.data[0].price.unit_amount || 0,
           currency: subscription.currency || "aud",
@@ -859,7 +844,7 @@ async function handleSubscriptionCreated(subscription: Stripe.Subscription) {
           donationType: metadata.donation_type_label || "General Donation",
           campaignName: undefined,
           nextPaymentDate,
-          manageUrl: portalSession.url,
+          // NOTE: Portal URL removed - expires too quickly for email
         });
 
         await sendEmail({
@@ -1040,22 +1025,15 @@ async function handleInvoicePaymentSucceeded(
       });
     } else {
       try {
-        const customerId =
-          typeof subscription.customer === "string"
-            ? subscription.customer
-            : subscription.customer.id;
-
-        const portalSession = await stripe.billingPortal.sessions.create({
-          customer: customerId,
-          return_url: "alansar://donations",
-        });
+        // NOTE: Portal sessions are no longer created here as URLs expire too quickly
+        // Users should manage subscriptions through the app
 
         const nextPaymentDate = await calculateNextPaymentDate(
           metadata.frequency || "monthly"
         );
 
         if (metadata.donor_email) {
-          const emailData = monthlyRecurringReceipt({
+          const emailData = await monthlyRecurringReceipt({
             donorName: metadata.donor_name || "Anonymous",
             amount: invoice.amount_paid,
             currency: invoice.currency || "aud",
@@ -1065,7 +1043,7 @@ async function handleInvoicePaymentSucceeded(
             donationType: metadata.donation_type_label || "General Donation",
             campaignName: undefined,
             nextPaymentDate,
-            manageUrl: portalSession.url,
+            // NOTE: Portal URL removed - expires too quickly for email
           });
 
           const emailSent = await sendEmail({
@@ -1130,113 +1108,28 @@ async function handleInvoicePaymentFailed(invoice: Stripe.Invoice) {
       return;
     }
 
-    // Create portal session for payment update
-    const portalSession = await stripe.billingPortal.sessions.create({
-      customer: invoice.customer as string,
-      return_url: "alansar://donations",
-    });
+    // NOTE: Portal sessions are no longer created here as URLs expire too quickly
+    // Users should update payment through the app
 
     // Get next retry date if available
     const nextRetry = invoice.next_payment_attempt
       ? new Date(invoice.next_payment_attempt * 1000).toLocaleDateString("en-AU")
-      : null;
+      : undefined;
 
-    // Send escalated failure notification email
-    const { Resend } = await import("resend");
-    const resend = new Resend(process.env.RESEND_API_KEY);
+    // Send payment failure notification email using template
+    const emailData = await paymentFailedEmail({
+      donorName: (customer as Stripe.Customer).name || "Donor",
+      amount: invoice.amount_due,
+      currency: invoice.currency || "aud",
+      frequency: "recurring",
+      attemptCount,
+      nextRetryDate: nextRetry,
+    });
 
-    const urgencyColor = isUrgent ? "#dc2626" : "#f59e0b";
-    const urgencyTitle = isUrgent ? "🚨 URGENT: Final Attempt" : "⚠️ Payment Failed";
-    const urgencyMessage = isUrgent
-      ? `<div style="background-color: #fee2e2; border-left: 4px solid #dc2626; padding: 15px; margin: 20px 0; border-radius: 4px;">
-          <p style="color: #dc2626; font-size: 16px; font-weight: bold; margin: 0 0 10px 0;">
-            ⚠️ This is attempt #${attemptCount}
-          </p>
-          <p style="color: #1f2937; font-size: 14px; margin: 0;">
-            Your subscription will be cancelled if payment fails again. Please update your payment method immediately.
-          </p>
-        </div>`
-      : `<p style="color: #4b5563; font-size: 16px; line-height: 1.6; margin: 0 0 25px 0;">
-          This usually happens when a card expires or has insufficient funds. 
-          ${nextRetry ? `We will automatically retry on ${nextRetry}.` : ""}
-        </p>`;
-
-    await resend.emails.send({
-      from: "Al Ansar <donations@alansar.app>",
+    await sendEmail({
       to: customerEmail,
-      subject: isUrgent
-        ? `URGENT: Update payment method for recurring donation`
-        : `Payment failed - Please update payment method`,
-      html: `
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          </head>
-          <body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #f5f5f5;">
-            <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f5f5f5; padding: 20px;">
-              <tr>
-                <td align="center">
-                  <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 8px; overflow: hidden;">
-                    <tr>
-                      <td style="background-color: ${urgencyColor}; padding: 30px; text-align: center;">
-                        <h1 style="color: #ffffff; margin: 0; font-size: 28px;">${urgencyTitle}</h1>
-                      </td>
-                    </tr>
-                    
-                    <tr>
-                      <td style="padding: 40px 30px;">
-                        <h2 style="color: #1f2937; margin: 0 0 20px 0;">Action Required</h2>
-                        <p style="color: #4b5563; font-size: 16px; line-height: 1.6; margin: 0 0 15px 0;">Assalamu Alaikum,</p>
-                        <p style="color: #4b5563; font-size: 16px; line-height: 1.6; margin: 0 0 25px 0;">
-                          We were unable to process your recurring donation payment of <strong>$${(
-                            invoice.amount_due / 100
-                          ).toFixed(2)}</strong>.
-                        </p>
-                        ${urgencyMessage}
-                        <p style="color: #4b5563; font-size: 16px; line-height: 1.6; margin: 25px 0;">
-                          Please update your payment method to continue your recurring donation.
-                        </p>
-                        
-                        <table width="100%" cellpadding="0" cellspacing="0">
-                          <tr>
-                            <td align="center" style="padding: 20px 0;">
-                              <a href="${portalSession.url}" 
-                                 style="display: inline-block; 
-                                        background-color: ${urgencyColor}; 
-                                        color: #ffffff; 
-                                        text-decoration: none; 
-                                        padding: 16px 40px; 
-                                        border-radius: 8px; 
-                                        font-size: 18px; 
-                                        font-weight: bold;">
-                                Update Payment Method
-                              </a>
-                            </td>
-                          </tr>
-                        </table>
-                        
-                        <p style="color: #4b5563; font-size: 14px; line-height: 1.6; margin: 25px 0 0 0;">
-                          If you have any questions or need assistance, please don't hesitate to contact us.
-                        </p>
-                        <p style="color: #4b5563; font-size: 16px; line-height: 1.6; margin: 15px 0 0 0;">JazakAllah Khair for your continued support!</p>
-                      </td>
-                    </tr>
-                    
-                    <tr>
-                      <td style="background-color: #f9fafb; padding: 20px; text-align: center;">
-                        <p style="color: #6b7280; font-size: 12px; margin: 0 0 5px 0;">Al Ansar</p>
-                        <p style="color: #6b7280; font-size: 12px; margin: 0;">Secure portal powered by Stripe</p>
-                      </td>
-                    </tr>
-                  </table>
-                </td>
-              </tr>
-            </table>
-          </body>
-        </html>
-      `,
+      subject: emailData.subject,
+      html: emailData.html,
     });
 
     logger.info("✅ Payment failure email sent", {
@@ -1277,6 +1170,12 @@ async function handleInvoicePaymentFailed(invoice: Stripe.Invoice) {
 
 async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
   try {
+    const metadata = subscription.metadata || ({} as Record<string, string>);
+
+    // Get the recurring donation record for total calculation
+    const recurringDoc = await db.collection("recurringDonations").doc(subscription.id).get();
+    const recurringData = recurringDoc.data();
+
     // Update recurring donation status
     await db.collection("recurringDonations").doc(subscription.id).update({
       status: "cancelled",
@@ -1286,6 +1185,43 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
     logger.info("Recurring donation cancelled", {
       subscriptionId: subscription.id,
     });
+
+    // Send cancellation email if we have donor email
+    const donorEmail = metadata.donor_email || recurringData?.donor_email;
+    if (donorEmail) {
+      // Calculate total donated (sum of all donations for this subscription)
+      const donationsSnapshot = await db
+        .collection("donations")
+        .where("stripe_subscription_id", "==", subscription.id)
+        .where("payment_status", "==", "succeeded")
+        .get();
+
+      let totalDonated = 0;
+      donationsSnapshot.forEach((doc) => {
+        totalDonated += doc.data().amount || 0;
+      });
+
+      const emailData = await subscriptionCancelledEmail({
+        donorName: metadata.donor_name || recurringData?.donor_name || "Donor",
+        amount: subscription.items.data[0]?.price?.unit_amount || recurringData?.amount || 0,
+        currency: subscription.currency || "aud",
+        frequency: metadata.frequency || recurringData?.frequency || "monthly",
+        donationType: metadata.donation_type_label || recurringData?.donation_type_label || "General Donation",
+        totalDonated: totalDonated > 0 ? totalDonated : undefined,
+        startDate: recurringData?.created_at?.toDate?.()?.toLocaleDateString("en-AU"),
+      });
+
+      await sendEmail({
+        to: donorEmail,
+        subject: emailData.subject,
+        html: emailData.html,
+      });
+
+      logger.info("✅ Subscription cancelled email sent", {
+        subscriptionId: subscription.id,
+        email: donorEmail,
+      });
+    }
   } catch (error) {
     logger.error("Error handling subscription deleted", error);
     throw error;
@@ -1352,15 +1288,8 @@ async function handleSubscriptionUpdated(
 
     // Send confirmation email if meaningful change
     if ((amountChanged || frequencyChanged) && metadata.donor_email) {
-      const customerId =
-        typeof subscription.customer === "string"
-          ? subscription.customer
-          : subscription.customer.id;
-
-      const portalSession = await stripe.billingPortal.sessions.create({
-        customer: customerId,
-        return_url: "alansar://donations",
-      });
+      // NOTE: Portal sessions are no longer created here as URLs expire too quickly
+      // Users should manage subscriptions through the app
 
       const changesList = [];
       if (amountChanged) {
@@ -1374,30 +1303,26 @@ async function handleSubscriptionUpdated(
         );
       }
 
-      // Simple inline email for subscription changes
-      const { Resend } = await import("resend");
-      const resend = new Resend(process.env.RESEND_API_KEY);
+      const nextPaymentDate = await calculateNextPaymentDate(newFrequency);
 
-      await resend.emails.send({
-        from: "Al Ansar <donations@alansar.app>",
+      // Use subscriptionUpdatedEmail template  
+      const { getSubscriptionUpdatedEmail } = await import("./emails/index.js");
+      const { render } = await import("@react-email/render");
+      
+      const emailTemplate = getSubscriptionUpdatedEmail({
+        donorName: metadata.donor_name || "Donor",
+        changes: changesList,
+        nextPaymentDate,
+        newAmount: amountChanged ? newAmount : undefined,
+        newFrequency: frequencyChanged ? newFrequency : undefined,
+      });
+
+      const html = await render(emailTemplate.component);
+
+      await sendEmail({
         to: metadata.donor_email,
-        subject: "Your recurring donation has been updated",
-        html: `
-          <!DOCTYPE html>
-          <html>
-            <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-              <h2>Subscription Updated</h2>
-              <p>Assalamu Alaikum ${metadata.donor_name || ""},</p>
-              <p>Your recurring donation has been successfully updated:</p>
-              <ul>
-                ${changesList.map((change) => `<li>${change}</li>`).join("")}
-              </ul>
-              <p>Next payment: ${await calculateNextPaymentDate(newFrequency)}</p>
-              <p><a href="${portalSession.url}" style="display: inline-block; background: #1e3a8a; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px;">Manage Subscription</a></p>
-              <p>JazakAllah Khair!</p>
-            </body>
-          </html>
-        `,
+        subject: emailTemplate.subject,
+        html,
       });
 
       logger.info("✅ Subscription update email sent", {
@@ -1463,26 +1388,18 @@ async function handleChargeRefunded(charge: Stripe.Charge, stripe: Stripe) {
 
     // Send refund confirmation email
     if (donationData.donor_email) {
-      const { Resend } = await import("resend");
-      const resend = new Resend(process.env.RESEND_API_KEY);
+      const emailData = await refundConfirmationEmail({
+        donorName: donationData.donor_name || "Donor",
+        amount: charge.amount_refunded,
+        currency: charge.currency || "aud",
+        receiptNumber: donationData.receipt_number,
+        originalDate: donationData.date?.toString() || "N/A",
+      });
 
-      await resend.emails.send({
-        from: "Al Ansar <donations@alansar.app>",
+      await sendEmail({
         to: donationData.donor_email,
-        subject: `Refund processed - ${donationData.receipt_number}`,
-        html: `
-          <!DOCTYPE html>
-          <html>
-            <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-              <h2>Refund Processed</h2>
-              <p>Assalamu Alaikum ${donationData.donor_name || ""},</p>
-              <p>A refund of <strong>$${(charge.amount_refunded / 100).toFixed(2)}</strong> has been processed for your donation (Receipt: ${donationData.receipt_number}).</p>
-              <p><strong>Original Date:</strong> ${donationData.date}</p>
-              <p>The refund will appear on your original payment method within 5-10 business days.</p>
-              <p>If you have any questions, please contact us.</p>
-            </body>
-          </html>
-        `,
+        subject: emailData.subject,
+        html: emailData.html,
       });
 
       logger.info("✅ Refund confirmation email sent", {
@@ -1583,19 +1500,21 @@ async function handleDisputeCreated(
       ? new Date(dispute.evidence_details.due_by * 1000).toLocaleDateString("en-AU")
       : "Unknown";
 
+    const disputeHtml = await disputeAlertEmail({
+      disputeAmount,
+      disputeDueDate,
+      disputeReason: dispute.reason,
+      donorEmail: donationData.donor_email || "N/A",
+      donorName: donationData.donor_name,
+      receiptNumber: donationData.receipt_number,
+      disputeId: dispute.id,
+    });
+
     await sendEmail({
       from: "Al Ansar Alerts <donations@alansar.app>",
       to: adminEmail,
       subject: `🚨 URGENT: Dispute Created - $${disputeAmount} AUD`,
-      html: disputeAlertEmail({
-        disputeAmount,
-        disputeDueDate,
-        disputeReason: dispute.reason,
-        donorEmail: donationData.donor_email || "N/A",
-        donorName: donationData.donor_name,
-        receiptNumber: donationData.receipt_number,
-        disputeId: dispute.id,
-      }),
+      html: disputeHtml,
     });
 
     logger.info("✅ Admin dispute alert email sent", {

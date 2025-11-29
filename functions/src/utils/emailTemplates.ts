@@ -2,116 +2,44 @@
 // EMAIL TEMPLATES FOR DONATION RECEIPTS & NOTIFICATIONS
 // Location: mosque_app_functions/src/utils/emailTemplates.ts
 // ============================================================================
-// Centralized email templates using Resend
-// All templates maintain consistent branding and structure
+// 
+// MIGRATION NOTICE: This file now uses React Email for template rendering.
+// The old HTML string templates have been migrated to React Email components.
+// 
+// For new code, import directly from '../emails/index.js' instead.
+// ============================================================================
 
+import { render } from "@react-email/render";
 import { logger } from "firebase-functions";
 import { Resend } from "resend";
 
-// ============================================================================
-// EMAIL STYLING CONSTANTS
-// ============================================================================
+// Re-export config and utilities from the new email module
+export {
+  isValidEmail,
+  normalizeEmail,
+  DEFAULT_EMAIL_CONFIG,
+  COLORS,
+  type EmailConfig,
+  type EmailResult,
+} from "../emails/index.js";
 
-const COLORS = {
-  primary: "#1e3a8a", // Blue
-  success: "#16a34a", // Green
-  warning: "#f59e0b", // Orange
-  danger: "#dc2626", // Red
-  text: "#1f2937",
-  textLight: "#4b5563",
-  textMuted: "#6b7280",
-  background: "#f5f5f5",
-  cardBackground: "#ffffff",
-  footerBackground: "#f9fafb",
-};
-
-// ============================================================================
-// REUSABLE COMPONENTS
-// ============================================================================
-
-const emailHeader = (title: string, bgColor: string, emoji: string = "") => `
-  <tr>
-    <td style="background-color: ${bgColor}; padding: 30px; text-align: center;">
-      <h1 style="color: #ffffff; margin: 0; font-size: 28px;">
-        ${emoji} ${title}
-      </h1>
-    </td>
-  </tr>
-`;
-
-const emailFooter = () => `
-  <tr>
-    <td style="background-color: ${COLORS.footerBackground}; padding: 20px; text-align: center;">
-      <p style="color: ${COLORS.textMuted}; font-size: 12px; margin: 0 0 5px 0;">
-        Al Ansar Masjid
-      </p>
-      <p style="color: ${COLORS.textMuted}; font-size: 12px; margin: 0;">
-        Secure donations powered by Stripe
-      </p>
-    </td>
-  </tr>
-`;
-
-const button = (text: string, url: string, bgColor: string = COLORS.primary) => `
-  <table width="100%" cellpadding="0" cellspacing="0">
-    <tr>
-      <td align="center" style="padding: 20px 0;">
-        <a href="${url}" 
-           style="display: inline-block; 
-                  background-color: ${bgColor}; 
-                  color: #ffffff; 
-                  text-decoration: none; 
-                  padding: 16px 40px; 
-                  border-radius: 8px; 
-                  font-size: 18px; 
-                  font-weight: bold;">
-          ${text}
-        </a>
-      </td>
-    </tr>
-  </table>
-`;
-
-const detailRow = (label: string, value: string) => `
-  <tr>
-    <td style="padding: 8px 0; border-bottom: 1px solid #e5e7eb;">
-      <table width="100%" cellpadding="0" cellspacing="0">
-        <tr>
-          <td style="color: ${COLORS.textMuted}; font-size: 14px; width: 40%;">
-            ${label}
-          </td>
-          <td style="color: ${COLORS.text}; font-size: 16px; font-weight: bold; text-align: right;">
-            ${value}
-          </td>
-        </tr>
-      </table>
-    </td>
-  </tr>
-`;
-
-const emailWrapper = (content: string) => `
-<!DOCTYPE html>
-<html>
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  </head>
-  <body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: ${COLORS.background};">
-    <table width="100%" cellpadding="0" cellspacing="0" style="background-color: ${COLORS.background}; padding: 20px;">
-      <tr>
-        <td align="center">
-          <table width="600" cellpadding="0" cellspacing="0" style="background-color: ${COLORS.cardBackground}; border-radius: 8px; overflow: hidden;">
-            ${content}
-          </table>
-        </td>
-      </tr>
-    </table>
-  </body>
-</html>
-`;
+// Import React Email templates
+import {
+  getOneTimeDonationReceiptEmail,
+  getRecurringWelcomeEmail,
+  getRecurringReceiptEmail,
+  getPaymentFailedEmail,
+  getSubscriptionCancelledEmail,
+  getRefundConfirmationEmail,
+  getDisputeAlertEmail,
+  isValidEmail,
+  normalizeEmail,
+  DEFAULT_EMAIL_CONFIG,
+} from "../emails/index.js";
 
 // ============================================================================
-// EMAIL TEMPLATE: ONE-TIME DONATION RECEIPT
+// BACKWARDS COMPATIBLE INTERFACES
+// These match the old interface signatures for drop-in replacement
 // ============================================================================
 
 export interface OneTimeDonationData {
@@ -126,68 +54,6 @@ export interface OneTimeDonationData {
   cardBrand?: string;
 }
 
-export function oneTimeDonationReceipt(data: OneTimeDonationData): {
-  subject: string;
-  html: string;
-} {
-  const formattedAmount = `$${(data.amount / 100).toFixed(2)}`;
-  const paymentMethod = data.cardLast4
-    ? `${data.cardBrand || "Card"} ending in ${data.cardLast4}`
-    : "Card";
-
-  const content = `
-    ${emailHeader("JazakAllah Khair!", COLORS.success, "✅")}
-    
-    <tr>
-      <td style="padding: 40px 30px;">
-        <h2 style="color: ${COLORS.text}; margin: 0 0 20px 0;">
-          Your Donation Receipt
-        </h2>
-        
-        <p style="color: ${COLORS.textLight}; font-size: 16px; line-height: 1.6; margin: 0 0 15px 0;">
-          Assalamu Alaikum ${data.donorName},
-        </p>
-        
-        <p style="color: ${COLORS.textLight}; font-size: 16px; line-height: 1.6; margin: 0 0 30px 0;">
-          Thank you for your generous donation of <strong>${formattedAmount}</strong>. 
-          May Allah (SWT) accept your donation and bless you abundantly.
-        </p>
-        
-        <!-- Donation Details -->
-        <table width="100%" cellpadding="0" cellspacing="0" style="background-color: ${COLORS.footerBackground}; border-radius: 8px; padding: 20px; margin: 20px 0;">
-          ${detailRow("Amount", formattedAmount)}
-          ${detailRow("Receipt Number", data.receiptNumber)}
-          ${detailRow("Date", data.date)}
-          ${detailRow("Donation Type", data.donationType)}
-          ${data.campaignName ? detailRow("Campaign", data.campaignName) : ""}
-          ${detailRow("Payment Method", paymentMethod)}
-        </table>
-        
-        <p style="color: ${COLORS.textLight}; font-size: 14px; line-height: 1.6; margin: 25px 0 0 0;">
-          Please keep this receipt for your records. If you have any questions, 
-          feel free to contact us.
-        </p>
-        
-        <p style="color: ${COLORS.textLight}; font-size: 16px; line-height: 1.6; margin: 15px 0 0 0;">
-          <strong>JazakAllah Khair!</strong><br>
-          The Al Ansar Masjid Team
-        </p>
-      </td>
-    </tr>
-    
-    ${emailFooter()}
-  `;
-
-  return {
-    subject: `Donation Receipt - ${data.receiptNumber}`,
-    html: emailWrapper(content),
-  };
-}
-
-// ============================================================================
-// EMAIL TEMPLATE: RECURRING DONATION WELCOME
-// ============================================================================
-
 export interface RecurringWelcomeData {
   donorName: string;
   amount: number;
@@ -196,69 +62,11 @@ export interface RecurringWelcomeData {
   donationType: string;
   campaignName?: string;
   nextPaymentDate: string;
-  manageUrl: string;
+  /**
+   * @deprecated Portal URLs expire quickly. Do not embed in emails.
+   */
+  manageUrl?: string;
 }
-
-export function recurringDonationWelcome(data: RecurringWelcomeData): {
-  subject: string;
-  html: string;
-} {
-  const formattedAmount = `$${(data.amount / 100).toFixed(2)}`;
-
-  const content = `
-    ${emailHeader("Recurring Donation Activated", COLORS.primary, "🔄")}
-    
-    <tr>
-      <td style="padding: 40px 30px;">
-        <h2 style="color: ${COLORS.text}; margin: 0 0 20px 0;">
-          Thank You for Your Ongoing Support!
-        </h2>
-        
-        <p style="color: ${COLORS.textLight}; font-size: 16px; line-height: 1.6; margin: 0 0 15px 0;">
-          Assalamu Alaikum ${data.donorName},
-        </p>
-        
-        <p style="color: ${COLORS.textLight}; font-size: 16px; line-height: 1.6; margin: 0 0 30px 0;">
-          Your ${data.frequency} recurring donation of <strong>${formattedAmount}</strong> 
-          has been successfully set up. May Allah (SWT) reward you for your continuous support.
-        </p>
-        
-        <!-- Subscription Details -->
-        <table width="100%" cellpadding="0" cellspacing="0" style="background-color: ${COLORS.footerBackground}; border-radius: 8px; padding: 20px; margin: 20px 0;">
-          ${detailRow("Amount", formattedAmount)}
-          ${detailRow("Frequency", data.frequency.charAt(0).toUpperCase() + data.frequency.slice(1))}
-          ${detailRow("Donation Type", data.donationType)}
-          ${data.campaignName ? detailRow("Campaign", data.campaignName) : ""}
-          ${detailRow("Next Payment", data.nextPaymentDate)}
-        </table>
-        
-        <p style="color: ${COLORS.textLight}; font-size: 16px; line-height: 1.6; margin: 25px 0;">
-          You will receive a receipt via email after each successful payment. 
-          You can manage your donation (update amount, change frequency, or cancel) 
-          at any time using the link below.
-        </p>
-        
-        ${button("Manage Your Donation", data.manageUrl)}
-        
-        <p style="color: ${COLORS.textLight}; font-size: 16px; line-height: 1.6; margin: 25px 0 0 0;">
-          <strong>JazakAllah Khair for your ongoing support!</strong><br>
-          The Al Ansar Masjid Team
-        </p>
-      </td>
-    </tr>
-    
-    ${emailFooter()}
-  `;
-
-  return {
-    subject: `Your ${data.frequency} donation is now active`,
-    html: emailWrapper(content),
-  };
-}
-
-// ============================================================================
-// EMAIL TEMPLATE: MONTHLY RECURRING RECEIPT
-// ============================================================================
 
 export interface MonthlyReceiptData {
   donorName: string;
@@ -270,69 +78,11 @@ export interface MonthlyReceiptData {
   donationType: string;
   campaignName?: string;
   nextPaymentDate: string;
-  manageUrl: string;
+  /**
+   * @deprecated Portal URLs expire quickly. Do not embed in emails.
+   */
+  manageUrl?: string;
 }
-
-export function monthlyRecurringReceipt(data: MonthlyReceiptData): {
-  subject: string;
-  html: string;
-} {
-  const formattedAmount = `$${(data.amount / 100).toFixed(2)}`;
-
-  const content = `
-    ${emailHeader("Payment Successful", COLORS.success, "✅")}
-    
-    <tr>
-      <td style="padding: 40px 30px;">
-        <h2 style="color: ${COLORS.text}; margin: 0 0 20px 0;">
-          Your Recurring Donation Receipt
-        </h2>
-        
-        <p style="color: ${COLORS.textLight}; font-size: 16px; line-height: 1.6; margin: 0 0 15px 0;">
-          Assalamu Alaikum ${data.donorName},
-        </p>
-        
-        <p style="color: ${COLORS.textLight}; font-size: 16px; line-height: 1.6; margin: 0 0 30px 0;">
-          Your ${data.frequency} donation of <strong>${formattedAmount}</strong> 
-          has been successfully processed. JazakAllah Khair for your continued support!
-        </p>
-        
-        <!-- Payment Details -->
-        <table width="100%" cellpadding="0" cellspacing="0" style="background-color: ${COLORS.footerBackground}; border-radius: 8px; padding: 20px; margin: 20px 0;">
-          ${detailRow("Amount", formattedAmount)}
-          ${detailRow("Receipt Number", data.receiptNumber)}
-          ${detailRow("Date", data.date)}
-          ${detailRow("Frequency", data.frequency.charAt(0).toUpperCase() + data.frequency.slice(1))}
-          ${detailRow("Donation Type", data.donationType)}
-          ${data.campaignName ? detailRow("Campaign", data.campaignName) : ""}
-          ${detailRow("Next Payment", data.nextPaymentDate)}
-        </table>
-        
-        <p style="color: ${COLORS.textLight}; font-size: 14px; line-height: 1.6; margin: 25px 0;">
-          You can manage your donation settings anytime using the link below.
-        </p>
-        
-        ${button("Manage Donation", data.manageUrl)}
-        
-        <p style="color: ${COLORS.textLight}; font-size: 16px; line-height: 1.6; margin: 25px 0 0 0;">
-          <strong>JazakAllah Khair!</strong><br>
-          The Al Ansar Masjid Team
-        </p>
-      </td>
-    </tr>
-    
-    ${emailFooter()}
-  `;
-
-  return {
-    subject: `Receipt for your ${data.frequency} donation - ${data.receiptNumber}`,
-    html: emailWrapper(content),
-  };
-}
-
-// ============================================================================
-// EMAIL TEMPLATE: PAYMENT FAILED
-// ============================================================================
 
 export interface PaymentFailedData {
   donorName: string;
@@ -341,94 +91,11 @@ export interface PaymentFailedData {
   frequency: string;
   attemptCount: number;
   nextRetryDate?: string;
-  updatePaymentUrl: string;
+  /**
+   * @deprecated Portal URLs expire quickly. Do not embed in emails.
+   */
+  updatePaymentUrl?: string;
 }
-
-export function paymentFailedEmail(data: PaymentFailedData): {
-  subject: string;
-  html: string;
-} {
-  const formattedAmount = `$${(data.amount / 100).toFixed(2)}`;
-  const isUrgent = data.attemptCount >= 3;
-  const urgencyColor = isUrgent ? COLORS.danger : COLORS.warning;
-  const urgencyEmoji = isUrgent ? "🚨" : "⚠️";
-  const urgencyText = isUrgent
-    ? "URGENT: Final Attempt"
-    : "Action Required";
-
-  const content = `
-    ${emailHeader(urgencyText, urgencyColor, urgencyEmoji)}
-    
-    <tr>
-      <td style="padding: 40px 30px;">
-        <h2 style="color: ${COLORS.text}; margin: 0 0 20px 0;">
-          Payment Failed - Please Update
-        </h2>
-        
-        <p style="color: ${COLORS.textLight}; font-size: 16px; line-height: 1.6; margin: 0 0 15px 0;">
-          Assalamu Alaikum ${data.donorName},
-        </p>
-        
-        <p style="color: ${COLORS.textLight}; font-size: 16px; line-height: 1.6; margin: 0 0 25px 0;">
-          We were unable to process your ${data.frequency} donation of 
-          <strong>${formattedAmount}</strong>.
-        </p>
-        
-        ${
-          isUrgent
-            ? `
-        <div style="background-color: #fee2e2; border-left: 4px solid ${COLORS.danger}; padding: 15px; margin: 20px 0; border-radius: 4px;">
-          <p style="color: ${COLORS.danger}; font-size: 16px; font-weight: bold; margin: 0 0 10px 0;">
-            ⚠️ This is the ${data.attemptCount}rd attempt
-          </p>
-          <p style="color: ${COLORS.text}; font-size: 14px; margin: 0;">
-            Your subscription will be cancelled if payment fails again. 
-            Please update your payment method immediately.
-          </p>
-        </div>
-        `
-            : `
-        <p style="color: ${COLORS.textLight}; font-size: 16px; line-height: 1.6; margin: 0 0 25px 0;">
-          This usually happens when a card expires or has insufficient funds. 
-          ${
-            data.nextRetryDate
-              ? `We will automatically retry on ${data.nextRetryDate}.`
-              : ""
-          }
-        </p>
-        `
-        }
-        
-        <p style="color: ${COLORS.textLight}; font-size: 16px; line-height: 1.6; margin: 25px 0;">
-          Please update your payment method to continue your recurring donation.
-        </p>
-        
-        ${button("Update Payment Method", data.updatePaymentUrl, urgencyColor)}
-        
-        <p style="color: ${COLORS.textLight}; font-size: 14px; line-height: 1.6; margin: 25px 0 0 0;">
-          If you have any questions or need assistance, please contact us.
-        </p>
-        
-        <p style="color: ${COLORS.textLight}; font-size: 16px; line-height: 1.6; margin: 15px 0 0 0;">
-          JazakAllah Khair for your support!
-        </p>
-      </td>
-    </tr>
-    
-    ${emailFooter()}
-  `;
-
-  return {
-    subject: isUrgent
-      ? `URGENT: Update payment method for ${data.frequency} donation`
-      : `Payment failed - Please update payment method`,
-    html: emailWrapper(content),
-  };
-}
-
-// ============================================================================
-// EMAIL TEMPLATE: SUBSCRIPTION CANCELLED
-// ============================================================================
 
 export interface SubscriptionCancelledData {
   donorName: string;
@@ -440,80 +107,6 @@ export interface SubscriptionCancelledData {
   startDate?: string;
 }
 
-export function subscriptionCancelledEmail(data: SubscriptionCancelledData): {
-  subject: string;
-  html: string;
-} {
-  const formattedAmount = `$${(data.amount / 100).toFixed(2)}`;
-  const totalDonated = data.totalDonated
-    ? `$${(data.totalDonated / 100).toFixed(2)}`
-    : null;
-
-  const content = `
-    ${emailHeader("Subscription Cancelled", COLORS.textMuted, "📋")}
-    
-    <tr>
-      <td style="padding: 40px 30px;">
-        <h2 style="color: ${COLORS.text}; margin: 0 0 20px 0;">
-          Your Recurring Donation Has Been Cancelled
-        </h2>
-        
-        <p style="color: ${COLORS.textLight}; font-size: 16px; line-height: 1.6; margin: 0 0 15px 0;">
-          Assalamu Alaikum ${data.donorName},
-        </p>
-        
-        <p style="color: ${COLORS.textLight}; font-size: 16px; line-height: 1.6; margin: 0 0 30px 0;">
-          Your ${data.frequency} donation of <strong>${formattedAmount}</strong> 
-          has been cancelled as requested. No further payments will be processed.
-        </p>
-        
-        ${
-          totalDonated
-            ? `
-        <div style="background-color: ${COLORS.footerBackground}; border-radius: 8px; padding: 25px; margin: 20px 0; text-align: center;">
-          <p style="color: ${COLORS.textMuted}; font-size: 14px; margin: 0 0 10px 0;">
-            Total Donated Since ${data.startDate || "Start"}
-          </p>
-          <p style="color: ${COLORS.success}; font-size: 32px; font-weight: bold; margin: 0;">
-            ${totalDonated}
-          </p>
-          <p style="color: ${COLORS.textLight}; font-size: 14px; margin: 10px 0 0 0;">
-            JazakAllah Khair for your generous support!
-          </p>
-        </div>
-        `
-            : ""
-        }
-        
-        <p style="color: ${COLORS.textLight}; font-size: 16px; line-height: 1.6; margin: 25px 0;">
-          Thank you for your support of Al Ansar Masjid. Your contributions have 
-          made a meaningful difference in our community.
-        </p>
-        
-        <p style="color: ${COLORS.textLight}; font-size: 16px; line-height: 1.6; margin: 25px 0;">
-          You're always welcome to donate again at any time through our app.
-        </p>
-        
-        <p style="color: ${COLORS.textLight}; font-size: 16px; line-height: 1.6; margin: 25px 0 0 0;">
-          <strong>May Allah (SWT) reward you for your generosity!</strong><br>
-          The Al Ansar Masjid Team
-        </p>
-      </td>
-    </tr>
-    
-    ${emailFooter()}
-  `;
-
-  return {
-    subject: "Your recurring donation has been cancelled",
-    html: emailWrapper(content),
-  };
-}
-
-// ============================================================================
-// EMAIL TEMPLATE: REFUND CONFIRMATION
-// ============================================================================
-
 export interface RefundData {
   donorName: string;
   amount: number;
@@ -522,62 +115,6 @@ export interface RefundData {
   refundReason?: string;
   originalDate: string;
 }
-
-export function refundConfirmationEmail(data: RefundData): {
-  subject: string;
-  html: string;
-} {
-  const formattedAmount = `$${(data.amount / 100).toFixed(2)}`;
-
-  const content = `
-    ${emailHeader("Refund Processed", COLORS.primary, "💰")}
-    
-    <tr>
-      <td style="padding: 40px 30px;">
-        <h2 style="color: ${COLORS.text}; margin: 0 0 20px 0;">
-          Your Refund Has Been Processed
-        </h2>
-        
-        <p style="color: ${COLORS.textLight}; font-size: 16px; line-height: 1.6; margin: 0 0 15px 0;">
-          Assalamu Alaikum ${data.donorName},
-        </p>
-        
-        <p style="color: ${COLORS.textLight}; font-size: 16px; line-height: 1.6; margin: 0 0 30px 0;">
-          A refund of <strong>${formattedAmount}</strong> has been processed 
-          for your donation (Receipt: ${data.receiptNumber}).
-        </p>
-        
-        <!-- Refund Details -->
-        <table width="100%" cellpadding="0" cellspacing="0" style="background-color: ${COLORS.footerBackground}; border-radius: 8px; padding: 20px; margin: 20px 0;">
-          ${detailRow("Refund Amount", formattedAmount)}
-          ${detailRow("Original Receipt", data.receiptNumber)}
-          ${detailRow("Original Date", data.originalDate)}
-          ${data.refundReason ? detailRow("Reason", data.refundReason) : ""}
-        </table>
-        
-        <p style="color: ${COLORS.textLight}; font-size: 14px; line-height: 1.6; margin: 25px 0;">
-          The refund will appear on your original payment method within 5-10 business days, 
-          depending on your bank or card issuer.
-        </p>
-        
-        <p style="color: ${COLORS.textLight}; font-size: 14px; line-height: 1.6; margin: 25px 0 0 0;">
-          If you have any questions about this refund, please contact us.
-        </p>
-      </td>
-    </tr>
-    
-    ${emailFooter()}
-  `;
-
-  return {
-    subject: `Refund processed - ${data.receiptNumber}`,
-    html: emailWrapper(content),
-  };
-}
-
-// ============================================================================
-// TEMPLATE: DISPUTE ADMIN ALERT EMAIL
-// ============================================================================
 
 export interface DisputeAlertEmailParams {
   disputeAmount: string;
@@ -589,121 +126,6 @@ export interface DisputeAlertEmailParams {
   disputeId: string;
 }
 
-export function disputeAlertEmail(params: DisputeAlertEmailParams): string {
-  return `
-    <!DOCTYPE html>
-    <html>
-      <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      </head>
-      <body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: ${COLORS.background};">
-        <table width="100%" cellpadding="0" cellspacing="0" style="background-color: ${COLORS.background}; padding: 20px;">
-          <tr>
-            <td align="center">
-              <table width="600" cellpadding="0" cellspacing="0" style="background-color: ${COLORS.cardBackground}; border-radius: 8px; overflow: hidden; border: 3px solid ${COLORS.danger};">
-                ${emailHeader("URGENT: Dispute Created", COLORS.danger, "🚨")}
-                
-                <tr>
-                  <td style="padding: 40px 30px; background-color: #fef2f2;">
-                    <h2 style="color: #991b1b; margin: 0 0 20px 0;">Immediate Action Required</h2>
-                    <p style="color: #991b1b; font-size: 18px; font-weight: bold; margin: 0 0 15px 0;">
-                      A chargeback dispute has been filed for a donation.
-                    </p>
-                    <p style="color: ${COLORS.textLight}; font-size: 14px; margin: 0 0 25px 0;">
-                      You must respond before <strong>${params.disputeDueDate}</strong> or the dispute will automatically be lost.
-                    </p>
-                  </td>
-                </tr>
-                
-                <tr>
-                  <td style="padding: 0 30px 30px 30px;">
-                    <table width="100%" cellpadding="0" cellspacing="0" style="background-color: ${COLORS.footerBackground}; border-radius: 8px; padding: 20px;">
-                      <tr>
-                        <td>
-                          <h3 style="color: ${COLORS.text}; margin: 0 0 15px 0;">Dispute Details</h3>
-                          <table width="100%" cellpadding="8" cellspacing="0">
-                            <tr>
-                              <td style="color: ${COLORS.textMuted}; font-size: 14px; border-bottom: 1px solid #e5e7eb;"><strong>Amount:</strong></td>
-                              <td style="color: ${COLORS.text}; font-size: 14px; border-bottom: 1px solid #e5e7eb;">$${params.disputeAmount} AUD</td>
-                            </tr>
-                            <tr>
-                              <td style="color: ${COLORS.textMuted}; font-size: 14px; border-bottom: 1px solid #e5e7eb;"><strong>Reason:</strong></td>
-                              <td style="color: ${COLORS.text}; font-size: 14px; border-bottom: 1px solid #e5e7eb;">${params.disputeReason}</td>
-                            </tr>
-                            <tr>
-                              <td style="color: ${COLORS.textMuted}; font-size: 14px; border-bottom: 1px solid #e5e7eb;"><strong>Donor Email:</strong></td>
-                              <td style="color: ${COLORS.text}; font-size: 14px; border-bottom: 1px solid #e5e7eb;">${params.donorEmail}</td>
-                            </tr>
-                            <tr>
-                              <td style="color: ${COLORS.textMuted}; font-size: 14px; border-bottom: 1px solid #e5e7eb;"><strong>Donor Name:</strong></td>
-                              <td style="color: ${COLORS.text}; font-size: 14px; border-bottom: 1px solid #e5e7eb;">${params.donorName}</td>
-                            </tr>
-                            <tr>
-                              <td style="color: ${COLORS.textMuted}; font-size: 14px; border-bottom: 1px solid #e5e7eb;"><strong>Receipt #:</strong></td>
-                              <td style="color: ${COLORS.text}; font-size: 14px; border-bottom: 1px solid #e5e7eb;">${params.receiptNumber}</td>
-                            </tr>
-                            <tr>
-                              <td style="color: ${COLORS.textMuted}; font-size: 14px; border-bottom: 1px solid #e5e7eb;"><strong>Dispute ID:</strong></td>
-                              <td style="color: ${COLORS.text}; font-size: 14px; border-bottom: 1px solid #e5e7eb;">${params.disputeId}</td>
-                            </tr>
-                            <tr>
-                              <td style="color: ${COLORS.textMuted}; font-size: 14px;"><strong>Response Due:</strong></td>
-                              <td style="color: ${COLORS.danger}; font-size: 14px; font-weight: bold;">${params.disputeDueDate}</td>
-                            </tr>
-                          </table>
-                        </td>
-                      </tr>
-                    </table>
-                    
-                    <table width="100%" cellpadding="0" cellspacing="0" style="margin-top: 25px;">
-                      <tr>
-                        <td align="center">
-                          <a href="https://dashboard.stripe.com/disputes/${params.disputeId}" 
-                             style="display: inline-block; 
-                                    background-color: ${COLORS.danger}; 
-                                    color: #ffffff; 
-                                    text-decoration: none; 
-                                    padding: 16px 40px; 
-                                    border-radius: 8px; 
-                                    font-size: 18px; 
-                                    font-weight: bold;">
-                            Respond to Dispute in Stripe
-                          </a>
-                        </td>
-                      </tr>
-                    </table>
-                    
-                    <div style="background-color: #fef3c7; border-left: 4px solid ${COLORS.warning}; padding: 15px; margin: 25px 0; border-radius: 4px;">
-                      <p style="color: #92400e; font-size: 14px; margin: 0; font-weight: bold;">⚠️ Important Notes:</p>
-                      <ul style="color: #92400e; font-size: 14px; margin: 10px 0 0 0; padding-left: 20px;">
-                        <li>Gather all evidence: receipts, communication logs, delivery proof</li>
-                        <li>Respond promptly - late responses are automatically lost</li>
-                        <li>Stripe charges a $25 AUD dispute fee regardless of outcome</li>
-                        <li>Check if this is part of a recurring subscription</li>
-                      </ul>
-                    </div>
-                  </td>
-                </tr>
-                
-                <tr>
-                  <td style="background-color: ${COLORS.footerBackground}; padding: 20px; text-align: center; border-top: 1px solid #e5e7eb;">
-                    <p style="color: ${COLORS.textMuted}; font-size: 12px; margin: 0;">Al Ansar Masjid - Stripe Dispute Alert</p>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-        </table>
-      </body>
-    </html>
-  `;
-}
-
-// ============================================================================
-// EMAIL SENDING HELPER
-// ============================================================================
-
 export interface SendEmailParams {
   to: string;
   subject: string;
@@ -711,39 +133,202 @@ export interface SendEmailParams {
   from?: string;
 }
 
+// ============================================================================
+// BACKWARDS COMPATIBLE EMAIL SENDING
+// ============================================================================
+
+/**
+ * Sends an email with raw HTML content (backwards compatible)
+ * @param params Email parameters including recipient, subject, and HTML content
+ * @returns true if email was sent successfully, false otherwise
+ */
 export async function sendEmail(params: SendEmailParams): Promise<boolean> {
+  // Validate email address
+  if (!isValidEmail(params.to)) {
+    logger.warn("Invalid email address provided", { to: params.to });
+    return false;
+  }
+
+  const normalizedTo = normalizeEmail(params.to);
+
   try {
-    // Short-circuit during local emulator runs to avoid network latency/timeouts
-    if (process.env.FUNCTIONS_EMULATOR === "true" || process.env.FIREBASE_EMULATOR_HUB) {
+    // Short-circuit during local emulator runs
+    if (
+      process.env.FUNCTIONS_EMULATOR === "true" ||
+      process.env.FIREBASE_EMULATOR_HUB
+    ) {
       logger.info("(EMULATOR) Skipping real email send, simulating success", {
-        to: params.to,
+        to: normalizedTo,
         subject: params.subject,
       });
-      return true; // Simulate success so downstream logic proceeds
+      return true;
+    }
+
+    if (!process.env.RESEND_API_KEY) {
+      logger.error("RESEND_API_KEY not configured");
+      return false;
     }
 
     const resend = new Resend(process.env.RESEND_API_KEY);
 
     const result = await resend.emails.send({
-      from: params.from || "Al Ansar <donations@alansar.app>",
-      to: params.to,
+      from: params.from || `${DEFAULT_EMAIL_CONFIG.mosqueShortName} <${DEFAULT_EMAIL_CONFIG.fromEmail}>`,
+      to: normalizedTo,
       subject: params.subject,
       html: params.html,
     });
 
+    if (result.error) {
+      logger.error("❌ Email sending failed", {
+        to: normalizedTo,
+        subject: params.subject,
+        error: result.error.message,
+      });
+      return false;
+    }
+
     logger.info("✅ Email sent successfully", {
-      to: params.to,
+      to: normalizedTo,
       subject: params.subject,
       emailId: result.data?.id,
     });
 
     return true;
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
     logger.error("❌ Email sending failed", {
-      to: params.to,
+      to: normalizedTo,
       subject: params.subject,
-      error: error.message,
+      error: errorMessage,
     });
     return false;
   }
+}
+
+// ============================================================================
+// BACKWARDS COMPATIBLE TEMPLATE FUNCTIONS
+// These render React Email components to HTML strings for compatibility
+// ============================================================================
+
+/**
+ * One-time donation receipt email
+ */
+export async function oneTimeDonationReceipt(data: OneTimeDonationData): Promise<{
+  subject: string;
+  html: string;
+}> {
+  const email = getOneTimeDonationReceiptEmail(data);
+  const html = await render(email.component);
+  return {
+    subject: email.subject,
+    html,
+  };
+}
+
+/**
+ * Recurring donation welcome email
+ */
+export async function recurringDonationWelcome(data: RecurringWelcomeData): Promise<{
+  subject: string;
+  html: string;
+}> {
+  const email = getRecurringWelcomeEmail(data);
+  const html = await render(email.component);
+  return {
+    subject: email.subject,
+    html,
+  };
+}
+
+/**
+ * Monthly recurring receipt email
+ */
+export async function monthlyRecurringReceipt(data: MonthlyReceiptData): Promise<{
+  subject: string;
+  html: string;
+}> {
+  const email = getRecurringReceiptEmail({
+    donorName: data.donorName,
+    amount: data.amount,
+    currency: data.currency,
+    receiptNumber: data.receiptNumber,
+    date: data.date,
+    frequency: data.frequency,
+    donationType: data.donationType,
+    campaignName: data.campaignName,
+    nextPaymentDate: data.nextPaymentDate,
+  });
+  const html = await render(email.component);
+  return {
+    subject: email.subject,
+    html,
+  };
+}
+
+/**
+ * Payment failed email
+ */
+export async function paymentFailedEmail(data: PaymentFailedData): Promise<{
+  subject: string;
+  html: string;
+}> {
+  const email = getPaymentFailedEmail(data);
+  const html = await render(email.component);
+  return {
+    subject: email.subject,
+    html,
+  };
+}
+
+/**
+ * Subscription cancelled email
+ */
+export async function subscriptionCancelledEmail(data: SubscriptionCancelledData): Promise<{
+  subject: string;
+  html: string;
+}> {
+  const email = getSubscriptionCancelledEmail(data);
+  const html = await render(email.component);
+  return {
+    subject: email.subject,
+    html,
+  };
+}
+
+/**
+ * Refund confirmation email
+ */
+export async function refundConfirmationEmail(data: RefundData): Promise<{
+  subject: string;
+  html: string;
+}> {
+  const email = getRefundConfirmationEmail({
+    donorName: data.donorName,
+    amount: data.amount,
+    currency: data.currency,
+    receiptNumber: data.receiptNumber,
+    refundReason: data.refundReason,
+    originalDate: data.originalDate,
+  });
+  const html = await render(email.component);
+  return {
+    subject: email.subject,
+    html,
+  };
+}
+
+/**
+ * Dispute alert email (for admins)
+ */
+export async function disputeAlertEmail(params: DisputeAlertEmailParams): Promise<string> {
+  const email = getDisputeAlertEmail({
+    disputeAmount: params.disputeAmount,
+    disputeDueDate: params.disputeDueDate,
+    disputeReason: params.disputeReason,
+    donorEmail: params.donorEmail,
+    donorName: params.donorName,
+    receiptNumber: params.receiptNumber,
+    disputeId: params.disputeId,
+  });
+  return await render(email.component);
 }
