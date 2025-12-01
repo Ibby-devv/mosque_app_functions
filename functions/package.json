@@ -16,6 +16,7 @@
   },
   "main": "lib/index.js",
   "dependencies": {
+    "@opentelemetry/api": "^1.9.0",
     "@react-email/components": "^0.5.7",
     "@react-email/preview-server": "^5.0.5",
     "@react-email/render": "^1.4.0",
