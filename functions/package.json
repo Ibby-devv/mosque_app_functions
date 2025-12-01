@@ -8,13 +8,18 @@
     "shell": "npm run build && firebase functions:shell",
     "start": "npm run shell",
     "deploy": "firebase deploy --only functions",
-    "logs": "firebase functions:log"
+    "logs": "firebase functions:log",
+    "email:dev": "npx react-email dev --dir emails --port 3000"
   },
   "engines": {
     "node": "20"
   },
   "main": "lib/index.js",
   "dependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@react-email/components": "^0.5.7",
+    "@react-email/preview-server": "^5.0.5",
+    "@react-email/render": "^1.4.0",
     "adhan": "^4.4.3",
     "axios": "^1.13.0",
     "firebase-admin": "^12.6.0",
@@ -23,6 +28,8 @@
     "stripe": "^14.21.0"
   },
   "devDependencies": {
+    "@types/html-to-text": "^9.0.4",
+    "@types/prismjs": "^1.26.5",
     "@types/react": "^19.2.2",
     "@typescript-eslint/eslint-plugin": "^5.12.0",
     "@typescript-eslint/parser": "^5.12.0",
@@ -30,6 +37,8 @@
     "eslint-config-google": "^0.14.0",
     "eslint-plugin-import": "^2.25.4",
     "firebase-functions-test": "^3.1.0",
+    "postcss": "^8.5.6",
+    "react-email": "^5.0.5",
     "typescript": "^5.1.6"
   },
   "private": true
