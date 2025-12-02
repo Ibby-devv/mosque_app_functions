@@ -47,12 +47,12 @@ export const createPaymentIntent = onCall(
         .doc("config")
         .get();
       const settingsData = settings.data();
-      const minAmount = (settingsData?.minimum_amount || 5) * 100; // Convert to cents
+      const minAmount = (settingsData?.minimum_amount ?? 1) * 100; // Convert to cents, default 1 if not set
 
       if (data.amount < minAmount) {
         throw new HttpsError(
           "invalid-argument",
-          `Minimum donation is $${minAmount / 100}`
+          `Minimum donation is $${(minAmount / 100).toFixed(2)}`
         );
       }
 
@@ -138,12 +138,12 @@ export const createSubscription = onCall(
         .doc("config")
         .get();
       const settingsData = settings.data();
-      const minAmount = (settingsData?.minimum_amount || 5) * 100;
+      const minAmount = (settingsData?.minimum_amount ?? 1) * 100; // Convert to cents, default 1 if not set
 
       if (data.amount < minAmount) {
         throw new HttpsError(
           "invalid-argument",
-          `Minimum donation is $${minAmount / 100}`
+          `Minimum donation is $${(minAmount / 100).toFixed(2)}`
         );
       }
 
