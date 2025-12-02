@@ -38,8 +38,10 @@ interface DonationRecord {
   payment_method_type: string;
   is_recurring: boolean;
   recurring_frequency?: string;
+  // Normalized to YYYY-MM-DD for client safety
   date: string;
-  created_at: any;
+  // ISO string for created_at (or epoch millis number if needed)
+  created_at: string | number;
   stripe_payment_intent_id?: string;
   stripe_subscription_id?: string;
   campaign_id?: string;
@@ -56,10 +58,11 @@ interface RecurringDonationRecord {
   status: string;
   donation_type_id: string;
   donation_type_label: string;
+  // Normalized to YYYY-MM-DD
   next_payment_date: string;
-  created_at: any;
-  started_at: any;
-  last_payment_at?: any;
+  created_at: string | number;
+  started_at: string | number;
+  last_payment_at?: string | number;
   stripe_subscription_id: string;
   stripe_customer_id: string;
 }
@@ -166,24 +169,48 @@ export const getDonationAnalytics = onCall(
         .orderBy("date", "desc")
         .orderBy("created_at", "desc");
 
-      // Fetch donations
       const donationsSnapshot = await donationsQuery.get();
+
+      // Helper to convert Firestore Timestamp to YYYY-MM-DD
+      const toYYYYMMDD = (timestamp: admin.firestore.Timestamp): string => {
+        if (!timestamp || !timestamp.toDate) return "";
+        const d = timestamp.toDate();
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, "0");
+        const day = String(d.getDate()).padStart(2, "0");
+        return `${y}-${m}-${day}`;
+      };
 
       let donations: DonationRecord[] = [];
       donationsSnapshot.forEach((doc: any) => {
-        const data = doc.data();
-        donations.push({
+        const raw = doc.data();
+        const normalized: DonationRecord = {
           id: doc.id,
-          ...data,
-        } as DonationRecord);
+          receipt_number: raw.receipt_number ?? "",
+          donor_name: raw.donor_name ?? "",
+          donor_email: raw.donor_email ?? "",
+          amount: raw.amount ?? 0,
+          currency: raw.currency ?? "AUD",
+          donation_type_id: raw.donation_type_id ?? "",
+          donation_type_label: raw.donation_type_label ?? "",
+          payment_status: raw.payment_status ?? "unknown",
+          payment_method_type: raw.payment_method_type ?? "",
+          is_recurring: !!raw.is_recurring,
+          recurring_frequency: raw.recurring_frequency,
+          date: toYYYYMMDD(raw.date),
+          created_at: raw.created_at?.toDate()?.toISOString() ?? "",
+          stripe_payment_intent_id: raw.stripe_payment_intent_id,
+          stripe_subscription_id: raw.stripe_subscription_id,
+          campaign_id: raw.campaign_id,
+          donor_message: raw.donor_message,
+        };
+        donations.push(normalized);
       });
 
-      // Apply client-side filters (for fields that can't be indexed)
+      // Client-side filters (for fields that can't be indexed)
       if (searchName) {
         const searchLower = searchName.toLowerCase();
-        donations = donations.filter((d) =>
-          d.donor_name.toLowerCase().includes(searchLower)
-        );
+        donations = donations.filter((d) => d.donor_name.toLowerCase().includes(searchLower));
       }
 
       // Store total count before pagination
@@ -216,11 +243,25 @@ export const getDonationAnalytics = onCall(
       const recurringSnapshot = await recurringQuery.get();
       let recurringDonations: RecurringDonationRecord[] = [];
       recurringSnapshot.forEach((doc: any) => {
-        const data = doc.data();
-        recurringDonations.push({
+        const raw = doc.data();
+        const normalized: RecurringDonationRecord = {
           id: doc.id,
-          ...data,
-        } as RecurringDonationRecord);
+          donor_name: raw.donor_name ?? "",
+          donor_email: raw.donor_email ?? "",
+          amount: raw.amount ?? 0,
+          currency: raw.currency ?? "AUD",
+          frequency: raw.frequency ?? raw.recurring_frequency ?? "monthly",
+          status: raw.status ?? "unknown",
+          donation_type_id: raw.donation_type_id ?? "",
+          donation_type_label: raw.donation_type_label ?? "",
+          next_payment_date: toYYYYMMDD(raw.next_payment_date),
+          created_at: raw.created_at?.toDate()?.toISOString() ?? "",
+          started_at: raw.started_at?.toDate()?.toISOString() ?? "",
+          last_payment_at: raw.last_payment_at?.toDate()?.toISOString() ?? undefined,
+          stripe_subscription_id: raw.stripe_subscription_id ?? "",
+          stripe_customer_id: raw.stripe_customer_id ?? "",
+        };
+        recurringDonations.push(normalized);
       });
 
       // Apply client-side name filter
@@ -259,7 +300,7 @@ export const getDonationAnalytics = onCall(
         const amount = data.amount || 0;
         const type = data.donation_type_id || "unknown";
         const status = data.payment_status || "unknown";
-        const date = data.date || "";
+        const dateStr = toYYYYMMDD(data.date);
 
         summary.totalAmount += amount;
         summary.donationCount += 1;
@@ -281,8 +322,8 @@ export const getDonationAnalytics = onCall(
         summary.byStatus[status] = (summary.byStatus[status] || 0) + 1;
 
         // By month (YYYY-MM)
-        if (date) {
-          const month = date.substring(0, 7); // Extract YYYY-MM
+        if (dateStr) {
+          const month = dateStr.substring(0, 7); // Extract YYYY-MM
           if (!summary.byMonth[month]) {
             summary.byMonth[month] = { count: 0, amount: 0 };
           }
