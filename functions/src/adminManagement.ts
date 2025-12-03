@@ -1,7 +1,13 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { logger } from 'firebase-functions/v2';
 import * as admin from 'firebase-admin';
+import { render } from '@react-email/render';
 import { sendEmail } from './utils/emailTemplates';
+import {
+  getAdminOnboardingInviteEmail,
+  getPasswordResetEmail,
+  getEmailVerificationPromptEmail,
+} from './emails/index.js';
 import {
   RoleId,
   Permission,
@@ -542,25 +548,28 @@ export const createUserAccount = onCall(
       // Also generate email verification link
       const verifyLink = await admin.auth().generateEmailVerificationLink(email, { url: continueUrl });
 
-      // Send onboarding email via Resend
-      const html = `
-        <div style="font-family: Arial, sans-serif; line-height:1.5;">
-          <h2>Welcome to Al-Ansar Masjid Admin Dashboard</h2>
-          <p>Hello ${displayName || email},</p>
-          <p>Your admin account has been created. For security, please complete these two steps:</p>
-          <ol>
-            <li><strong>Set your password</strong>: <a href="${resetLink}">Open password setup link</a></li>
-            <li><strong>Verify your email</strong>: <a href="${verifyLink}">Verify your email address</a></li>
-          </ol>
-          <p>If a link has expired, ask an admin to resend your invite or try the password reset from the login page.</p>
-          <p>Dashboard: <a href="${continueUrl}">${continueUrl}</a></p>
-          <p>Regards,<br/>Al-Ansar Masjid Team</p>
-        </div>
-      `;
+      // Get role names for email
+      const roleNames = rolesToAssign.map(roleId => {
+        // Simple conversion from RoleId enum to readable name
+        return roleId.split('_').map(word => 
+          word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+        ).join(' ');
+      });
+
+      // Send onboarding email via Resend using React Email template
+      const emailTemplate = getAdminOnboardingInviteEmail({
+        adminName: displayName || email.split('@')[0],
+        resetLink,
+        verifyLink,
+        dashboardUrl: continueUrl,
+        roles: roleNames.length > 0 ? roleNames : undefined,
+      });
+
+      const html = await render(emailTemplate.component);
 
       const emailSent = await sendEmail({
         to: email,
-        subject: 'Your Admin Dashboard Access',
+        subject: emailTemplate.subject,
         html,
       });
 
@@ -637,20 +646,17 @@ export const sendAdminOnboardingEmail = onCall(
       const resetLink = await admin.auth().generatePasswordResetLink(email.trim(), { url: targetUrl });
       const verifyLink = await admin.auth().generateEmailVerificationLink(email.trim(), { url: targetUrl });
 
-      const html = `
-        <div style="font-family: Arial, sans-serif; line-height:1.5;">
-          <h2>Admin Access Instructions</h2>
-          <p>Hello ${user.displayName || email},</p>
-          <p>Please set your password and verify your email:</p>
-          <ul>
-            <li><a href="${resetLink}">Set your password</a></li>
-            <li><a href="${verifyLink}">Verify your email</a></li>
-          </ul>
-          <p>If links expire, contact an administrator.</p>
-        </div>
-      `;
+      // Send onboarding email using React Email template
+      const emailTemplate = getAdminOnboardingInviteEmail({
+        adminName: user.displayName || email.split('@')[0],
+        resetLink,
+        verifyLink,
+        dashboardUrl: targetUrl,
+      });
 
-      const emailSent = await sendEmail({ to: email.trim(), subject: 'Admin Onboarding', html });
+      const html = await render(emailTemplate.component);
+
+      const emailSent = await sendEmail({ to: email.trim(), subject: emailTemplate.subject, html });
 
       await db.collection('adminLogs').add({
         action: 'invite_sent',
@@ -715,13 +721,15 @@ export const sendPasswordReset = onCall(
       const user = await admin.auth().getUserByEmail(email.trim());
       const resetLink = await admin.auth().generatePasswordResetLink(email.trim(), { url: 'https://alansar.app' });
 
-      const html = `<div style="font-family: Arial, sans-serif;">
-        <p>Hello ${user.displayName || email},</p>
-        <p>You requested a password reset. Click below:</p>
-        <p><a href="${resetLink}">Reset your password</a></p>
-      </div>`;
+      // Send password reset email using React Email template
+      const emailTemplate = getPasswordResetEmail({
+        adminName: user.displayName || email.split('@')[0],
+        resetLink,
+      });
 
-      const emailSent = await sendEmail({ to: email.trim(), subject: 'Password Reset', html });
+      const html = await render(emailTemplate.component);
+
+      const emailSent = await sendEmail({ to: email.trim(), subject: emailTemplate.subject, html });
 
       await db.collection('adminLogs').add({
         action: 'password_reset_sent',
@@ -773,13 +781,15 @@ export const sendEmailVerification = onCall(
       const user = await admin.auth().getUserByEmail(email.trim());
       const verifyLink = await admin.auth().generateEmailVerificationLink(email.trim(), { url: continueUrl || 'https://alansar.app' });
 
-      const html = `<div style="font-family: Arial, sans-serif;">
-        <p>Hello ${user.displayName || email},</p>
-        <p>Please verify your email address to access admin features.</p>
-        <p><a href="${verifyLink}">Verify your email</a></p>
-      </div>`;
+      // Send email verification using React Email template
+      const emailTemplate = getEmailVerificationPromptEmail({
+        adminName: user.displayName || email.split('@')[0],
+        verifyLink,
+      });
 
-      const emailSent = await sendEmail({ to: email.trim(), subject: 'Verify your email', html });
+      const html = await render(emailTemplate.component);
+
+      const emailSent = await sendEmail({ to: email.trim(), subject: emailTemplate.subject, html });
 
       await db.collection('adminLogs').add({
         action: 'verification_sent',
