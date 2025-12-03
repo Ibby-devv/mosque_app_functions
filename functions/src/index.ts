@@ -56,7 +56,11 @@ export {
   createUserAccount,
   setUserRoles,
   listUsers,
-  removeUserRoles
+  removeUserRoles,
+  sendAdminOnboardingEmail,
+  resendAdminInvite,
+  sendPasswordReset,
+  sendEmailVerification
 } from './adminManagement';
 export { setSuperAdminProtection } from './setSuperAdmin';
 export { updateUserProfile } from './updateUserProfile';
