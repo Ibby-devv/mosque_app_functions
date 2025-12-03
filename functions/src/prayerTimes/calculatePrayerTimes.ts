@@ -38,12 +38,18 @@ export async function calculateAndUpdatePrayerTimes(
     const methodName = mosqueSettings.calculation_method || "MuslimWorldLeague";
     const params = CalculationMethod[methodName as keyof typeof CalculationMethod]();
 
-    // Calculate prayer times for today
-    const date = new Date();
+    // Calculate prayer times for today IN THE MOSQUE'S TIMEZONE
+    // Get mosque timezone and create a date for today in that timezone
+    const mosqueTimezone = mosqueSettings.timezone || "Australia/Sydney";
+    
+    // Get today's date in the mosque's timezone
+    const now = new Date();
+    const dateString = now.toLocaleDateString("en-US", { timeZone: mosqueTimezone });
+    const date = new Date(dateString); // This creates a Date at midnight in the mosque's timezone
+    
     const adhanPrayerTimes = new AdhanPrayerTimes(coordinates, date, params);
 
     // Convert Date objects to 12-hour format strings in mosque timezone
-    const mosqueTimezone = mosqueSettings.timezone || "Australia/Sydney";
     const formatTime = (date: Date): string => {
       return date.toLocaleTimeString("en-US", {
         hour: "numeric",
