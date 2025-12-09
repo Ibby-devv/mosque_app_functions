@@ -119,6 +119,9 @@ The `appDeepLink` (`alansar://donations`) must be configured in your mobile app:
 | `RefundConfirmation` | Refund notification | When a refund is processed |
 | `DisputeAlert` | Admin alert for disputes | When a chargeback is filed |
 | `ManagementLink` | Instructions to manage subscription | When user requests management access |
+| `AdminOnboardingInvite` | Welcome email for new admin accounts | When admin account is created |
+| `PasswordReset` | Password reset instructions | When admin requests password reset |
+| `EmailVerificationPrompt` | Email verification reminder | When admin needs to verify email |
 
 ## Usage Example
 

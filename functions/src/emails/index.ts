@@ -77,6 +77,25 @@ export {
   type ManagementLinkData,
 } from "./templates/ManagementLink.js";
 
+// Admin Templates
+export {
+  AdminOnboardingInviteEmail,
+  getAdminOnboardingInviteEmail,
+  type AdminOnboardingInviteData,
+} from "./templates/AdminOnboardingInvite.js";
+
+export {
+  EmailVerificationPromptEmail,
+  getEmailVerificationPromptEmail,
+  type EmailVerificationPromptData,
+} from "./templates/EmailVerificationPrompt.js";
+
+export {
+  PasswordResetEmail,
+  getPasswordResetEmail,
+  type PasswordResetData,
+} from "./templates/PasswordReset.js";
+
 // Email Service
 export {
   sendEmail,

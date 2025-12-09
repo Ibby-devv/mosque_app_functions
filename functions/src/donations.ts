@@ -12,6 +12,105 @@ import Stripe from "stripe";
 const db = admin.firestore();
 
 // ============================================================================
+// HELPER: Check if Donation is Anonymous
+// ============================================================================
+
+/**
+ * Determines if a donation should be treated as anonymous based on donor information.
+ * A donation is anonymous if:
+ * - No email provided (empty/null/undefined)
+ * - Email is the placeholder "anonymous@donation.com"
+ * - Name is exactly "Anonymous" (case-insensitive)
+ * 
+ * @param donorEmail - The donor's email address
+ * @param donorName - The donor's name
+ * @returns true if donation should be treated as anonymous
+ */
+function isAnonymousDonation(donorEmail: string | null | undefined, donorName: string): boolean {
+  // No email provided
+  if (!donorEmail || donorEmail.trim() === "") {
+    return true;
+  }
+  
+  // Placeholder anonymous email
+  if (donorEmail.toLowerCase() === "anonymous@donation.com") {
+    return true;
+  }
+  
+  // Name is "Anonymous"
+  if (donorName.trim().toLowerCase() === "anonymous") {
+    return true;
+  }
+  
+  return false;
+}
+
+// ============================================================================
+// HELPER: Get or Create Shared Anonymous Customer
+// ============================================================================
+
+/**
+ * Gets or creates a shared anonymous customer to avoid duplicate anonymous customers in Stripe.
+ * Stores the customer ID in Firestore for reuse across all anonymous donations.
+ */
+async function getOrCreateAnonymousCustomer(
+  stripe: Stripe
+): Promise<string> {
+  const anonymousCustomerRef = db.collection("settings").doc("stripe");
+
+  try {
+    const doc = await anonymousCustomerRef.get();
+
+    // Check if anonymous customer already exists
+    if (doc.exists && doc.data()?.anonymousCustomerId) {
+      const customerId = doc.data()!.anonymousCustomerId;
+
+      // Verify customer still exists in Stripe
+      try {
+        await stripe.customers.retrieve(customerId);
+        logger.info("Reusing existing anonymous customer", { customerId });
+        return customerId;
+      } catch (error) {
+        logger.warn(
+          "Anonymous customer not found in Stripe, creating new one",
+          { customerId }
+        );
+      }
+    }
+
+    // Create new anonymous customer
+    const customer = await stripe.customers.create({
+      description: "Anonymous Donor (Shared)",
+      metadata: {
+        type: "anonymous",
+        created_by: "system",
+      },
+    });
+
+    // Store for future use
+    await anonymousCustomerRef.set(
+      {
+        anonymousCustomerId: customer.id,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    logger.info("Created new shared anonymous customer", {
+      customerId: customer.id,
+    });
+
+    return customer.id;
+  } catch (error) {
+    logger.error("Error managing anonymous customer", error);
+    throw new HttpsError(
+      "internal",
+      "Failed to create anonymous customer"
+    );
+  }
+}
+
+// ============================================================================
 // FUNCTION 1: Create Payment Intent (One-Time Donation)
 // ============================================================================
 
@@ -56,33 +155,58 @@ export const createPaymentIntent = onCall(
         );
       }
 
-      // Create Stripe customer (for better tracking)
-      const customer = await stripe.customers.create({
-        name: data.donor_name,
-        email: data.donor_email,
-        phone: data.donor_phone,
-        metadata: {
-          donation_type: data.donation_type_label,
-          campaign_id: data.campaign_id || "none",
-        },
-      });
+      // Determine if donation is anonymous using robust helper
+      const isAnonymous = isAnonymousDonation(data.donor_email, data.donor_name);
+
+      let customerId: string;
+
+      if (isAnonymous) {
+        // Reuse shared anonymous customer
+        customerId = await getOrCreateAnonymousCustomer(stripe);
+        logger.info("Using shared anonymous customer for one-time donation");
+      } else {
+        // Create or find customer for non-anonymous donations
+        const existingCustomers = await stripe.customers.list({
+          email: data.donor_email,
+          limit: 1,
+        });
+
+        if (existingCustomers.data.length > 0) {
+          customerId = existingCustomers.data[0].id;
+          logger.info("Using existing customer", { customerId });
+        } else {
+          const customer = await stripe.customers.create({
+            name: data.donor_name,
+            email: data.donor_email,
+            phone: data.donor_phone,
+            metadata: {
+              donation_type: data.donation_type_label,
+              campaign_id: data.campaign_id || "none",
+            },
+          });
+          customerId = customer.id;
+          logger.info("Created new customer", { customerId });
+        }
+      }
 
       // Create payment intent
       const paymentIntent = await stripe.paymentIntents.create({
         amount: data.amount,
         currency: "aud",
-        customer: customer.id,
+        customer: customerId,
         metadata: {
           donor_name: data.donor_name,
-          donor_email: data.donor_email,
+          donor_email: data.donor_email || "anonymous",
           donor_phone: data.donor_phone || "",
           donation_type_id: data.donation_type_id,
           donation_type_label: data.donation_type_label,
           campaign_id: data.campaign_id || "",
           donor_message: data.donor_message || "",
           is_recurring: "false",
+          is_anonymous: isAnonymous.toString(),
         },
         description: `Donation to ${data.donation_type_label}`,
+        receipt_email: isAnonymous ? undefined : data.donor_email,
       });
 
       logger.info("Payment intent created", {
@@ -147,16 +271,47 @@ export const createSubscription = onCall(
         );
       }
 
-      // Create Stripe customer
-      const customer = await stripe.customers.create({
-        name: data.donor_name,
-        email: data.donor_email,
-        phone: data.donor_phone,
-        metadata: {
-          donation_type: data.donation_type_label,
-          campaign_id: data.campaign_id || "none",
-        },
-      });
+      // Determine if donation is anonymous using robust helper
+      const isAnonymous = isAnonymousDonation(data.donor_email, data.donor_name);
+
+      // Note: For recurring donations, we strongly encourage non-anonymous
+      // to allow donors to manage subscriptions, but we still support it
+      let customerId: string;
+
+      if (isAnonymous) {
+        // Reuse shared anonymous customer
+        customerId = await getOrCreateAnonymousCustomer(stripe);
+        logger.warn(
+          "Creating anonymous recurring donation - donor cannot manage subscription"
+        );
+      } else {
+        // Create or find customer for non-anonymous donations
+        const existingCustomers = await stripe.customers.list({
+          email: data.donor_email,
+          limit: 1,
+        });
+
+        if (existingCustomers.data.length > 0) {
+          customerId = existingCustomers.data[0].id;
+          logger.info("Using existing customer for subscription", {
+            customerId,
+          });
+        } else {
+          const customer = await stripe.customers.create({
+            name: data.donor_name,
+            email: data.donor_email,
+            phone: data.donor_phone,
+            metadata: {
+              donation_type: data.donation_type_label,
+              campaign_id: data.campaign_id || "none",
+            },
+          });
+          customerId = customer.id;
+          logger.info("Created new customer for subscription", {
+            customerId,
+          });
+        }
+      }
 
       // Map frequency to Stripe interval
       const intervalMap: Record<
@@ -186,20 +341,21 @@ export const createSubscription = onCall(
 
       // Create subscription
       const subscription = await stripe.subscriptions.create({
-        customer: customer.id,
+        customer: customerId,
         items: [{ price: price.id }],
         payment_behavior: "default_incomplete",
         payment_settings: { save_default_payment_method: "on_subscription" },
         expand: ["latest_invoice.payment_intent"],
         metadata: {
           donor_name: data.donor_name,
-          donor_email: data.donor_email,
+          donor_email: data.donor_email || "anonymous",
           donor_phone: data.donor_phone || "",
           donation_type_id: data.donation_type_id,
           donation_type_label: data.donation_type_label,
           campaign_id: data.campaign_id || "",
           frequency: data.frequency,
           is_recurring: "true",
+          is_anonymous: isAnonymous.toString(),
         },
       });
 
@@ -217,7 +373,7 @@ export const createSubscription = onCall(
       return {
         clientSecret: paymentIntent.client_secret,
         subscriptionId: subscription.id,
-        customerId: customer.id,
+        customerId: customerId,
       };
     } catch (error: any) {
       logger.error("Error creating subscription", error);

@@ -1,6 +1,13 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { logger } from 'firebase-functions/v2';
 import * as admin from 'firebase-admin';
+import { render } from '@react-email/render';
+import { sendEmail } from './utils/emailTemplates';
+import {
+  getAdminOnboardingInviteEmail,
+  getPasswordResetEmail,
+  getEmailVerificationPromptEmail,
+} from './emails/index.js';
 import {
   RoleId,
   Permission,
@@ -240,6 +247,7 @@ export const listUsers = onCall(
           isSuperAdmin: isSuperAdmin(roles),
           createdAt: user.metadata.creationTime,
           lastSignIn: user.metadata.lastSignInTime || 'Never',
+          emailVerified: user.emailVerified === true,
         };
       });
 
@@ -418,7 +426,8 @@ export const removeAdmin = onCall(
 export const createUserAccount = onCall(
   { 
     region: 'australia-southeast1',
-    cors: true
+    cors: true,
+    secrets: ['RESEND_API_KEY']
   },
   async (request) => {
     // Verify caller is authenticated
@@ -531,16 +540,58 @@ export const createUserAccount = onCall(
       });
 
       // Generate password reset link for user to set their own password
-      const resetLink = await admin.auth().generatePasswordResetLink(email);
+      const continueUrl = request.data?.continueUrl || 'https://alansar.app';
+      const resetLink = await admin.auth().generatePasswordResetLink(email, { url: continueUrl });
 
       logger.info(`Password reset link generated for: ${email}`);
+
+      // Also generate email verification link
+      const verifyLink = await admin.auth().generateEmailVerificationLink(email, { url: continueUrl });
+
+      // Get role names for email
+      const roleNames = rolesToAssign.map(roleId => {
+        // Simple conversion from RoleId enum to readable name
+        return roleId.split('_').map(word => 
+          word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+        ).join(' ');
+      });
+
+      // Send onboarding email via Resend using React Email template
+      const emailTemplate = getAdminOnboardingInviteEmail({
+        adminName: displayName || email.split('@')[0],
+        resetLink,
+        verifyLink,
+        dashboardUrl: continueUrl,
+        roles: roleNames.length > 0 ? roleNames : undefined,
+      });
+
+      const html = await render(emailTemplate.component);
+
+      const emailSent = await sendEmail({
+        to: email,
+        subject: emailTemplate.subject,
+        html,
+      });
+
+      // Log email send status
+      await db.collection('adminLogs').add({
+        action: 'invite_sent',
+        targetUser: userRecord.uid,
+        targetEmail: email,
+        emailSent,
+        performedBy: request.auth.uid,
+        performedByEmail: request.auth.token.email || 'unknown',
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      });
 
       return {
         success: true,
         message: `Account created successfully for ${email}`,
         uid: userRecord.uid,
         resetLink: resetLink,
+        verifyLink: verifyLink,
         roles: rolesToAssign,
+        inviteEmailSent: emailSent,
       };
     } catch (error: any) {
       logger.error('Error creating user account:', error);
@@ -559,6 +610,203 @@ export const createUserAccount = onCall(
         );
       }
 
+      throw new HttpsError('internal', error.message);
+    }
+  }
+);
+
+/**
+ * Send onboarding email to an existing user (password setup + verify email)
+ */
+export const sendAdminOnboardingEmail = onCall(
+  {
+    region: 'australia-southeast1',
+    cors: true,
+    secrets: ['RESEND_API_KEY']
+  },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError('unauthenticated', 'Must be logged in');
+    }
+
+    const callerPermissions = (request.auth.token.permissions as Permission[]) || [];
+    const callerIsSuperAdmin = request.auth.token.superAdmin === true || request.auth.token.admin === true;
+    if (!callerIsSuperAdmin && !canManageUsers(callerPermissions)) {
+      throw new HttpsError('permission-denied', 'You do not have permission');
+    }
+
+    const { email, continueUrl } = request.data || {};
+    if (!email || typeof email !== 'string') {
+      throw new HttpsError('invalid-argument', 'Valid email required');
+    }
+
+    try {
+      const user = await admin.auth().getUserByEmail(email.trim());
+      const targetUrl = continueUrl || 'https://alansar.app';
+      const resetLink = await admin.auth().generatePasswordResetLink(email.trim(), { url: targetUrl });
+      const verifyLink = await admin.auth().generateEmailVerificationLink(email.trim(), { url: targetUrl });
+
+      // Send onboarding email using React Email template
+      const emailTemplate = getAdminOnboardingInviteEmail({
+        adminName: user.displayName || email.split('@')[0],
+        resetLink,
+        verifyLink,
+        dashboardUrl: targetUrl,
+      });
+
+      const html = await render(emailTemplate.component);
+
+      const emailSent = await sendEmail({ to: email.trim(), subject: emailTemplate.subject, html });
+
+      await db.collection('adminLogs').add({
+        action: 'invite_sent',
+        targetUser: user.uid,
+        targetEmail: email.trim(),
+        emailSent,
+        performedBy: request.auth.uid,
+        performedByEmail: request.auth.token.email || 'unknown',
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      return { success: true, emailSent };
+    } catch (error: any) {
+      logger.error('Error sending onboarding email:', error);
+      if (error.code === 'auth/user-not-found') {
+        throw new HttpsError('not-found', `User with email ${email} not found`);
+      }
+      throw new HttpsError('internal', error.message);
+    }
+  }
+);
+
+/**
+ * Resend onboarding invite (rate limit can be added later)
+ */
+export const resendAdminInvite = onCall(
+  {
+    region: 'australia-southeast1',
+    cors: true
+  },
+  async (request) => {
+    return sendAdminOnboardingEmail.run(request);
+  }
+);
+
+/**
+ * Send a password reset email to a user
+ */
+export const sendPasswordReset = onCall(
+  {
+    region: 'australia-southeast1',
+    cors: true,
+    secrets: ['RESEND_API_KEY']
+  },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError('unauthenticated', 'Must be logged in');
+    }
+
+    const callerPermissions = (request.auth.token.permissions as Permission[]) || [];
+    const callerIsSuperAdmin = request.auth.token.superAdmin === true || request.auth.token.admin === true;
+    if (!callerIsSuperAdmin && !canManageUsers(callerPermissions)) {
+      throw new HttpsError('permission-denied', 'You do not have permission');
+    }
+
+    const { email } = request.data || {};
+    if (!email || typeof email !== 'string') {
+      throw new HttpsError('invalid-argument', 'Valid email required');
+    }
+
+    try {
+      const user = await admin.auth().getUserByEmail(email.trim());
+      const resetLink = await admin.auth().generatePasswordResetLink(email.trim(), { url: 'https://alansar.app' });
+
+      // Send password reset email using React Email template
+      const emailTemplate = getPasswordResetEmail({
+        adminName: user.displayName || email.split('@')[0],
+        resetLink,
+      });
+
+      const html = await render(emailTemplate.component);
+
+      const emailSent = await sendEmail({ to: email.trim(), subject: emailTemplate.subject, html });
+
+      await db.collection('adminLogs').add({
+        action: 'password_reset_sent',
+        targetUser: user.uid,
+        targetEmail: email.trim(),
+        emailSent,
+        performedBy: request.auth.uid,
+        performedByEmail: request.auth.token.email || 'unknown',
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      return { success: true, emailSent };
+    } catch (error: any) {
+      logger.error('Error sending password reset:', error);
+      if (error.code === 'auth/user-not-found') {
+        throw new HttpsError('not-found', `User with email ${email} not found`);
+      }
+      throw new HttpsError('internal', error.message);
+    }
+  }
+);
+
+/**
+ * Send an email verification link to a user
+ */
+export const sendEmailVerification = onCall(
+  {
+    region: 'australia-southeast1',
+    cors: true,
+    secrets: ['RESEND_API_KEY']
+  },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError('unauthenticated', 'Must be logged in');
+    }
+
+    const callerPermissions = (request.auth.token.permissions as Permission[]) || [];
+    const callerIsSuperAdmin = request.auth.token.superAdmin === true || request.auth.token.admin === true;
+    if (!callerIsSuperAdmin && !canManageUsers(callerPermissions)) {
+      throw new HttpsError('permission-denied', 'You do not have permission');
+    }
+
+    const { email, continueUrl } = request.data || {};
+    if (!email || typeof email !== 'string') {
+      throw new HttpsError('invalid-argument', 'Valid email required');
+    }
+
+    try {
+      const user = await admin.auth().getUserByEmail(email.trim());
+      const verifyLink = await admin.auth().generateEmailVerificationLink(email.trim(), { url: continueUrl || 'https://alansar.app' });
+
+      // Send email verification using React Email template
+      const emailTemplate = getEmailVerificationPromptEmail({
+        adminName: user.displayName || email.split('@')[0],
+        verifyLink,
+      });
+
+      const html = await render(emailTemplate.component);
+
+      const emailSent = await sendEmail({ to: email.trim(), subject: emailTemplate.subject, html });
+
+      await db.collection('adminLogs').add({
+        action: 'verification_sent',
+        targetUser: user.uid,
+        targetEmail: email.trim(),
+        emailSent,
+        performedBy: request.auth.uid,
+        performedByEmail: request.auth.token.email || 'unknown',
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      return { success: true, emailSent };
+    } catch (error: any) {
+      logger.error('Error sending verification:', error);
+      if (error.code === 'auth/user-not-found') {
+        throw new HttpsError('not-found', `User with email ${email} not found`);
+      }
       throw new HttpsError('internal', error.message);
     }
   }
