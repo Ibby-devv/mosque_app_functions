@@ -29,6 +29,56 @@ import {
 
 const db = admin.firestore();
 
+// ============================================================================
+// HELPER: Check if Donation is Anonymous
+// ============================================================================
+
+/**
+ * Determines if a donation is anonymous based on metadata.
+ * Checks the is_anonymous flag first (most reliable), then falls back to
+ * checking email/name patterns.
+ * 
+ * @param metadata - Stripe metadata object
+ * @param email - Optional email address (from customer_details or metadata)
+ * @param name - Optional donor name
+ * @returns true if donation should be treated as anonymous
+ */
+function isAnonymousDonation(
+  metadata: Record<string, string | null | undefined>,
+  email?: string | null,
+  name?: string | null
+): boolean {
+  // Check explicit is_anonymous flag (most reliable)
+  if (metadata.is_anonymous === "true" || metadata.is_anonymous === "1") {
+    return true;
+  }
+  
+  if (metadata.is_anonymous === "false" || metadata.is_anonymous === "0") {
+    return false;
+  }
+  
+  // Fallback: Check patterns (for backwards compatibility or missing flag)
+  const checkEmail = email || metadata.donor_email;
+  const checkName = name || metadata.donor_name;
+  
+  // No email provided
+  if (!checkEmail || checkEmail.trim() === "") {
+    return true;
+  }
+  
+  // Placeholder anonymous email
+  if (checkEmail.toLowerCase() === "anonymous@donation.com") {
+    return true;
+  }
+  
+  // Name is "Anonymous"
+  if (checkName && checkName.trim().toLowerCase() === "anonymous") {
+    return true;
+  }
+  
+  return false;
+}
+
 // Get mosque timezone from settings (with cache)
 let cachedMosqueTimezone: string | null = null;
 const getMosqueTimezone = async (): Promise<string> => {
@@ -428,8 +478,10 @@ async function handleCheckoutOneTime(
       await updateCampaignTotal(metadata.campaign_id, session.amount_total);
     }
 
-    // Send receipt email if email provided
-    if (customerEmail) {
+    // Send receipt email if email provided and not anonymous
+    const isAnonymous = isAnonymousDonation(metadata, customerEmail, customerName);
+    
+    if (customerEmail && !isAnonymous) {
       logger.info("📧 Sending one-time donation receipt", {
         email: customerEmail,
         receiptNumber,
@@ -510,12 +562,16 @@ async function handleCheckoutSubscription(
     // Subscription record is created by customer.subscription.created event
     // Here we just send the welcome email
 
-    logger.info("📧 Sending recurring donation welcome email", {
+    // Check if donation is anonymous
+    const isAnonymous = isAnonymousDonation(metadata, customerEmail, customerName);
+    
+    logger.info("📧 Checking if welcome email should be sent", {
       email: customerEmail,
       subscriptionId,
+      isAnonymous,
     });
 
-    if (customerEmail) {
+    if (customerEmail && !isAnonymous) {
       // NOTE: Portal sessions are no longer created here as URLs expire too quickly
       // Users should manage subscriptions through the app
 
@@ -718,8 +774,10 @@ async function handlePaymentIntentSucceeded(
       await updateCampaignTotal(metadata.campaign_id, paymentIntent.amount);
     }
 
-    // Send receipt email if email provided
-    if (donorEmail) {
+    // Send receipt email if email provided and not anonymous
+    const isAnonymous = isAnonymousDonation(metadata, donorEmail, donorName);
+    
+    if (donorEmail && !isAnonymous) {
       logger.info("📧 Sending one-time donation receipt (fallback)", {
         email: donorEmail,
         receiptNumber,
@@ -1017,9 +1075,15 @@ async function handleInvoicePaymentSucceeded(
 
     // Send recurring receipt email (skip for first invoice - welcome email already sent)
     const isFirstInvoice = invoice.billing_reason === "subscription_create";
+    const isAnonymous = isAnonymousDonation(metadata);
     
     if (isFirstInvoice) {
       logger.info("⏭️ SKIP: First invoice receipt (welcome email already sent)", {
+        invoiceId: invoice.id,
+        subscriptionId: subscription.id,
+      });
+    } else if (isAnonymous) {
+      logger.info("⏭️ SKIP: Anonymous recurring donation - no email sent", {
         invoiceId: invoice.id,
         subscriptionId: subscription.id,
       });
