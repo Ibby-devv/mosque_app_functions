@@ -32,6 +32,7 @@ export interface ScheduledIqamaChange {
 export const createScheduledIqamaChange = onCall({
   region: "australia-southeast1",
   cors: true,
+  invoker: "public",
 }, async (request) => {
   // Auth check
   if (!request.auth) {
@@ -148,6 +149,7 @@ export const createScheduledIqamaChange = onCall({
 export const deleteScheduledIqamaChange = onCall({
   region: "australia-southeast1",
   cors: true,
+  invoker: "public",
 }, async (request) => {
   // Auth check
   if (!request.auth) {
@@ -214,6 +216,7 @@ export const deleteScheduledIqamaChange = onCall({
 export const getScheduledIqamaChanges = onCall({
   region: "australia-southeast1",
   cors: true,
+  invoker: "public",
 }, async (request) => {
   // Auth check
   if (!request.auth) {
@@ -247,13 +250,20 @@ export const getScheduledIqamaChanges = onCall({
     }
 
     const snapshot = await query.get();
-    const schedules: ScheduledIqamaChange[] = [];
+    const schedules: any[] = [];
 
     snapshot.forEach((doc) => {
+      const data = doc.data();
       schedules.push({
         id: doc.id,
-        ...doc.data(),
-      } as ScheduledIqamaChange);
+        prayer: data.prayer,
+        effectiveDate: data.effectiveDate.toMillis(), // Convert Timestamp to milliseconds
+        iqama_time: data.iqama_time,
+        applied: data.applied,
+        createdBy: data.createdBy,
+        createdAt: data.createdAt.toMillis(),
+        appliedAt: data.appliedAt?.toMillis(),
+      });
     });
 
     logger.info("✅ Retrieved scheduled iqama changes", {
