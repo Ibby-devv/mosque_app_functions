@@ -18,7 +18,6 @@
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
     "@react-email/components": "^0.5.7",
-    "@react-email/preview-server": "^5.0.5",
     "@react-email/render": "^1.4.0",
     "adhan": "^4.4.3",
     "axios": "^1.13.0",
@@ -28,6 +27,7 @@
     "stripe": "^14.21.0"
   },
   "devDependencies": {
+    "@react-email/preview-server": "^5.0.5",
     "@types/html-to-text": "^9.0.4",
     "@types/prismjs": "^1.26.5",
     "@types/react": "^19.2.2",

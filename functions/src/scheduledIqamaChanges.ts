@@ -18,8 +18,7 @@ export interface ScheduledIqamaChange {
   id: string;
   prayer: 'fajr' | 'dhuhr' | 'asr' | 'maghrib' | 'isha';
   effectiveDate: admin.firestore.Timestamp; // Date when change should be applied (midnight)
-  iqama_type: 'fixed' | 'offset';
-  iqama_value: string | number; // Time string for fixed, number for offset
+  iqama_time: string; // Fixed time only (e.g., "6:00 AM")
   applied: boolean;
   createdBy: string; // Admin user ID
   createdAt: admin.firestore.Timestamp;
@@ -48,7 +47,7 @@ export const createScheduledIqamaChange = onCall({
     );
   }
 
-  const { prayer, effectiveDate, iqama_type, iqama_value } = request.data;
+  const { prayer, effectiveDate, iqama_time } = request.data;
 
   // Validate input
   if (!prayer || !['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'].includes(prayer)) {
@@ -59,12 +58,13 @@ export const createScheduledIqamaChange = onCall({
     throw new HttpsError("invalid-argument", "Effective date is required");
   }
 
-  if (!iqama_type || !['fixed', 'offset'].includes(iqama_type)) {
-    throw new HttpsError("invalid-argument", "Invalid iqama type");
+  if (!iqama_time || typeof iqama_time !== 'string') {
+    throw new HttpsError("invalid-argument", "Iqama time is required and must be a valid time string");
   }
 
-  if (iqama_value === undefined || iqama_value === null) {
-    throw new HttpsError("invalid-argument", "Iqama value is required");
+  // Validate time format (e.g., "6:00 AM")
+  if (!/^\d{1,2}:\d{2}\s*(AM|PM)$/i.test(iqama_time)) {
+    throw new HttpsError("invalid-argument", "Iqama time must be in format '6:00 AM'");
   }
 
   try {
@@ -111,8 +111,7 @@ export const createScheduledIqamaChange = onCall({
     const scheduleData: Omit<ScheduledIqamaChange, 'id'> = {
       prayer,
       effectiveDate: startOfDay, // Store as start of day for consistent querying
-      iqama_type,
-      iqama_value,
+      iqama_time,
       applied: false,
       createdBy: request.auth.uid,
       createdAt: now,
@@ -278,20 +277,42 @@ export const getScheduledIqamaChanges = onCall({
 
 export const processScheduledIqamaChanges = onSchedule({
   schedule: "*/10 * * * *", // Every 10 minutes
-  timeZone: "Australia/Sydney",
+  timeZone: "Australia/Sydney", // Default scheduler timezone (can be changed)
   region: "australia-southeast1",
 }, async () => {
   try {
     logger.info("🕌 Processing scheduled iqama changes...");
 
     const db = admin.firestore();
+    
+    // Get mosque settings to read configured timezone
+    const mosqueSettingsDoc = await db
+      .collection("mosqueSettings")
+      .doc("info")
+      .get();
+
+    if (!mosqueSettingsDoc.exists) {
+      logger.error("❌ Mosque settings document not found");
+      return;
+    }
+
+    const mosqueSettings = mosqueSettingsDoc.data();
+    if (!mosqueSettings) {
+      logger.error("❌ No mosque settings data found");
+      return;
+    }
+
+    // Use mosque's configured timezone, fallback to Australia/Sydney
+    const mosqueTimezone = mosqueSettings.timezone || "Australia/Sydney";
+    logger.info(`Using mosque timezone: ${mosqueTimezone}`);
+
     const now = new Date();
     
-    // Get current time in Sydney timezone
-    const sydneyTime = new Date(now.toLocaleString("en-US", { timeZone: "Australia/Sydney" }));
+    // Get current time in mosque's timezone
+    const mosqueTime = new Date(now.toLocaleString("en-US", { timeZone: mosqueTimezone }));
     
-    // Calculate yesterday's date (since we apply changes 1 day before effective date)
-    const tomorrow = new Date(sydneyTime);
+    // Calculate tomorrow's date (since we apply changes 1 day before effective date)
+    const tomorrow = new Date(mosqueTime);
     tomorrow.setDate(tomorrow.getDate() + 1);
     tomorrow.setHours(0, 0, 0, 0);
     const tomorrowTimestamp = admin.firestore.Timestamp.fromDate(tomorrow);
@@ -346,7 +367,7 @@ export const processScheduledIqamaChanges = onSchedule({
         continue;
       }
 
-      const currentTimeMinutes = sydneyTime.getHours() * 60 + sydneyTime.getMinutes();
+      const currentTimeMinutes = mosqueTime.getHours() * 60 + mosqueTime.getMinutes();
 
       // Check if current time is past this prayer's adhan time today
       if (currentTimeMinutes >= adhanTime) {
@@ -367,21 +388,9 @@ export const processScheduledIqamaChanges = onSchedule({
     const updates: any = {};
 
     for (const schedule of changesToApply) {
-      // Update prayer times
-      if (schedule.iqama_type === 'fixed') {
-        updates[`${schedule.prayer}_iqama`] = schedule.iqama_value;
-        updates[`${schedule.prayer}_iqama_type`] = 'fixed';
-      } else {
-        updates[`${schedule.prayer}_iqama_offset`] = schedule.iqama_value;
-        updates[`${schedule.prayer}_iqama_type`] = 'offset';
-        
-        // Calculate and set the actual iqama time based on offset
-        const adhanTimeStr = currentPrayerTimes[`${schedule.prayer}_adhan`];
-        const calculatedIqama = calculateIqamaFromOffset(adhanTimeStr, schedule.iqama_value as number);
-        if (calculatedIqama) {
-          updates[`${schedule.prayer}_iqama`] = calculatedIqama;
-        }
-      }
+      // Update prayer times with scheduled fixed time
+      updates[`${schedule.prayer}_iqama`] = schedule.iqama_time;
+      updates[`${schedule.prayer}_iqama_type`] = 'fixed';
 
       // Mark schedule as applied
       const scheduleRef = db.collection("scheduledIqamaChanges").doc(schedule.id);
@@ -393,8 +402,7 @@ export const processScheduledIqamaChanges = onSchedule({
       logger.info(`✅ Applied scheduled change for ${schedule.prayer}`, {
         id: schedule.id,
         effectiveDate: schedule.effectiveDate.toDate().toISOString(),
-        iqama_type: schedule.iqama_type,
-        iqama_value: schedule.iqama_value,
+        iqama_time: schedule.iqama_time,
       });
     }
 
@@ -445,37 +453,4 @@ function parseTime(timeStr: string): number | null {
   }
 }
 
-/**
- * Calculate iqama time from adhan time + offset minutes
- */
-function calculateIqamaFromOffset(adhanTime: string, offset: number): string | null {
-  try {
-    const match = adhanTime.match(/(\d+):(\d+)\s*(AM|PM)/i);
-    if (!match) return null;
 
-    let hours = parseInt(match[1]);
-    const minutes = parseInt(match[2]);
-    const period = match[3].toUpperCase();
-
-    if (period === 'PM' && hours !== 12) {
-      hours += 12;
-    } else if (period === 'AM' && hours === 12) {
-      hours = 0;
-    }
-
-    let totalMinutes = hours * 60 + minutes + offset;
-    let newHours = Math.floor(totalMinutes / 60) % 24;
-    const newMinutes = totalMinutes % 60;
-
-    const newPeriod = newHours >= 12 ? 'PM' : 'AM';
-    if (newHours > 12) {
-      newHours -= 12;
-    } else if (newHours === 0) {
-      newHours = 12;
-    }
-
-    return `${newHours}:${newMinutes.toString().padStart(2, '0')} ${newPeriod}`;
-  } catch (error) {
-    return null;
-  }
-}
