@@ -286,7 +286,7 @@ export const getScheduledIqamaChanges = onCall({
 // ============================================================================
 
 export const processScheduledIqamaChanges = onSchedule({
-  schedule: "*/10 * * * *", // Every 10 minutes
+  schedule: "*/15 * * * *", // Every 15 minutes
   timeZone: "Australia/Sydney", // Default scheduler timezone (can be changed)
   region: "australia-southeast1",
 }, async () => {
