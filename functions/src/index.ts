@@ -73,3 +73,9 @@ export {
 } from './tokens';
 export { onMosqueSettingsUpdate } from './prayerTimes/onMosqueSettingsUpdate';
 export { updatePrayerTimes } from './prayerTimes/updatePrayerTimes';
+export { 
+  createScheduledIqamaChange, 
+  deleteScheduledIqamaChange, 
+  getScheduledIqamaChanges,
+  processScheduledIqamaChanges 
+} from './scheduledIqamaChanges';

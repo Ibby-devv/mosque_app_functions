@@ -102,6 +102,48 @@
         }
       ],
       "density": "SPARSE_ALL"
+    },
+    {
+      "collectionGroup": "scheduledIqamaChanges",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "applied",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "effectiveDate",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "__name__",
+          "order": "ASCENDING"
+        }
+      ],
+      "density": "SPARSE_ALL"
+    },
+    {
+      "collectionGroup": "scheduledIqamaChanges",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "prayer",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "applied",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "effectiveDate",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "__name__",
+          "order": "ASCENDING"
+        }
+      ],
+      "density": "SPARSE_ALL"
     }
   ],
   "fieldOverrides": []
