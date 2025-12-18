@@ -406,24 +406,25 @@ export const processScheduledIqamaChanges = onSchedule({
     
     for (const doc of pendingChanges.docs) {
       const schedule = { id: doc.id, ...doc.data() } as ScheduledIqamaChange;
-      const adhanTimeStr = currentPrayerTimes[`${schedule.prayer}_adhan`];
+      const iqamaTimeStr = currentPrayerTimes[`${schedule.prayer}_iqama`];
       
-      if (!adhanTimeStr) {
-        logger.warn(`⚠️ No adhan time found for ${schedule.prayer}`);
+      if (!iqamaTimeStr) {
+        logger.warn(`⚠️ No iqama time found for ${schedule.prayer}`);
         continue;
       }
 
-      // Parse adhan time (e.g., "5:30 AM")
-      const adhanTime = parseTime(adhanTimeStr);
-      if (!adhanTime) {
-        logger.warn(`⚠️ Could not parse adhan time: ${adhanTimeStr}`);
+      // Parse iqama time (e.g., "5:00 PM")
+      const iqamaTime = parseTime(iqamaTimeStr);
+      if (!iqamaTime) {
+        logger.warn(`⚠️ Could not parse iqama time: ${iqamaTimeStr}`);
         continue;
       }
 
       const currentTimeMinutes = mosqueDate.hour * 60 + mosqueDate.minute;
 
-      // Check if current time is past this prayer's adhan time today
-      if (currentTimeMinutes >= adhanTime) {
+      // Check if current time is past this prayer's iqama time today
+      // This ensures the scheduled change applies AFTER today's prayer is complete
+      if (currentTimeMinutes >= iqamaTime) {
         changesToApply.push(schedule);
       }
     }
