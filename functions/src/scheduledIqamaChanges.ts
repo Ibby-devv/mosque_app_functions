@@ -55,8 +55,13 @@ export const createScheduledIqamaChange = onCall({
     throw new HttpsError("invalid-argument", "Invalid prayer name");
   }
 
-  if (!effectiveDate) {
-    throw new HttpsError("invalid-argument", "Effective date is required");
+  if (!effectiveDate || typeof effectiveDate !== 'string') {
+    throw new HttpsError("invalid-argument", "Effective date is required and must be a date string (YYYY-MM-DD)");
+  }
+
+  // Validate date format (YYYY-MM-DD)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveDate)) {
+    throw new HttpsError("invalid-argument", "Effective date must be in format YYYY-MM-DD");
   }
 
   if (!iqama_time || typeof iqama_time !== 'string') {
@@ -72,26 +77,44 @@ export const createScheduledIqamaChange = onCall({
     const db = admin.firestore();
     const now = admin.firestore.Timestamp.now();
     
-    // Convert effectiveDate to Timestamp (set to midnight in mosque timezone)
-    const effectiveDateTimestamp = admin.firestore.Timestamp.fromMillis(effectiveDate);
+    // Get mosque timezone from settings
+    const mosqueSettingsDoc = await db.collection("mosqueSettings").doc("info").get();
+    if (!mosqueSettingsDoc.exists) {
+      throw new HttpsError("failed-precondition", "Mosque settings not found");
+    }
+    const mosqueTimezone = mosqueSettingsDoc.data()?.timezone || "Australia/Sydney";
+    
+    // Parse the date string and convert to midnight in mosque timezone
+    const [year, month, day] = effectiveDate.split('-').map(Number);
+    
+    // Create a date string that will be interpreted in the mosque timezone
+    // Using toLocaleString to get the date in the target timezone, then parsing it back
+    const dateStr = `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}T00:00:00`;
+    const tempDate = new Date(dateStr);
+    
+    // Convert to mosque timezone
+    const dateInMosqueTz = new Date(
+      tempDate.toLocaleString('en-US', { timeZone: mosqueTimezone })
+    );
+    
+    // Get UTC equivalent of midnight in mosque timezone
+    const utcOffset = tempDate.getTime() - dateInMosqueTz.getTime();
+    const midnightInMosqueTz = new Date(year, month - 1, day, 0, 0, 0, 0).getTime() + utcOffset;
+    
+    const startOfDay = admin.firestore.Timestamp.fromMillis(midnightInMosqueTz);
     
     // Validate that effectiveDate is in the future
-    if (effectiveDateTimestamp.toMillis() <= now.toMillis()) {
+    if (startOfDay.toMillis() <= now.toMillis()) {
       throw new HttpsError(
         "invalid-argument", 
         "Effective date must be in the future (at least tomorrow)"
       );
     }
-
-    // Check if a scheduled change already exists for this prayer on this date
-    // Compare only the date part (year-month-day)
-    const effectiveDateObj = effectiveDateTimestamp.toDate();
-    effectiveDateObj.setHours(0, 0, 0, 0);
-    const startOfDay = admin.firestore.Timestamp.fromDate(effectiveDateObj);
     
-    const endOfDayObj = new Date(effectiveDateObj);
-    endOfDayObj.setHours(23, 59, 59, 999);
-    const endOfDay = admin.firestore.Timestamp.fromDate(endOfDayObj);
+    // Calculate end of day for date comparison
+    const endOfDay = admin.firestore.Timestamp.fromMillis(
+      startOfDay.toMillis() + (24 * 60 * 60 * 1000 - 1)
+    );
 
     const existingSchedules = await db
       .collection("scheduledIqamaChanges")
@@ -123,14 +146,14 @@ export const createScheduledIqamaChange = onCall({
     logger.info("✅ Scheduled iqama change created", {
       id: docRef.id,
       prayer,
-      effectiveDate: effectiveDateTimestamp.toDate().toISOString(),
+      effectiveDate: startOfDay.toDate().toISOString(),
       createdBy: request.auth.uid,
     });
 
     return { 
       success: true, 
       id: docRef.id,
-      message: `Scheduled ${prayer} iqama change for ${effectiveDateTimestamp.toDate().toLocaleDateString()}`
+      message: `Scheduled ${prayer} iqama change for ${effectiveDate}`
     };
 
   } catch (error: any) {
@@ -318,14 +341,34 @@ export const processScheduledIqamaChanges = onSchedule({
 
     const now = new Date();
     
-    // Get current time in mosque's timezone
-    const mosqueTime = new Date(now.toLocaleString("en-US", { timeZone: mosqueTimezone }));
+    // Get current date in mosque's timezone
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: mosqueTimezone,
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: 'numeric',
+      hour12: false
+    });
     
-    // Calculate tomorrow's date (since we apply changes 1 day before effective date)
-    const tomorrow = new Date(mosqueTime);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    tomorrow.setHours(0, 0, 0, 0);
-    const tomorrowTimestamp = admin.firestore.Timestamp.fromDate(tomorrow);
+    const parts = formatter.formatToParts(now);
+    const mosqueDate = {
+      year: parseInt(parts.find(p => p.type === 'year')!.value),
+      month: parseInt(parts.find(p => p.type === 'month')!.value),
+      day: parseInt(parts.find(p => p.type === 'day')!.value),
+      hour: parseInt(parts.find(p => p.type === 'hour')!.value),
+      minute: parseInt(parts.find(p => p.type === 'minute')!.value),
+    };
+    
+    // Calculate tomorrow at midnight in mosque timezone
+    const tomorrowDateStr = `${mosqueDate.year}-${(mosqueDate.month).toString().padStart(2, '0')}-${(mosqueDate.day + 1).toString().padStart(2, '0')}T00:00:00`;
+    const tempDate = new Date(tomorrowDateStr);
+    const dateInMosqueTz = new Date(tempDate.toLocaleString('en-US', { timeZone: mosqueTimezone }));
+    const utcOffset = tempDate.getTime() - dateInMosqueTz.getTime();
+    const tomorrowMidnightInMosqueTz = new Date(mosqueDate.year, mosqueDate.month - 1, mosqueDate.day + 1, 0, 0, 0, 0).getTime() + utcOffset;
+    
+    const tomorrowTimestamp = admin.firestore.Timestamp.fromMillis(tomorrowMidnightInMosqueTz);
 
     // Get all unapplied scheduled changes for tomorrow
     const pendingChanges = await db
@@ -377,7 +420,7 @@ export const processScheduledIqamaChanges = onSchedule({
         continue;
       }
 
-      const currentTimeMinutes = mosqueTime.getHours() * 60 + mosqueTime.getMinutes();
+      const currentTimeMinutes = mosqueDate.hour * 60 + mosqueDate.minute;
 
       // Check if current time is past this prayer's adhan time today
       if (currentTimeMinutes >= adhanTime) {
