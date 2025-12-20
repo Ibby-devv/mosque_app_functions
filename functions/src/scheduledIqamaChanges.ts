@@ -425,7 +425,10 @@ export const processScheduledIqamaChanges = onSchedule({
       // Check if current time is past this prayer's iqama time today
       // This ensures the scheduled change applies AFTER today's prayer is complete
       if (currentTimeMinutes >= iqamaTime) {
+        logger.info(`✅ Ready to apply: ${schedule.prayer} scheduled for tomorrow (current time: ${mosqueDate.hour}:${mosqueDate.minute}, iqama was at ${iqamaTimeStr})`);
         changesToApply.push(schedule);
+      } else {
+        logger.info(`⏳ Not yet: ${schedule.prayer} scheduled for tomorrow (current: ${mosqueDate.hour}:${mosqueDate.minute}, waiting until after ${iqamaTimeStr})`);
       }
     }
 
