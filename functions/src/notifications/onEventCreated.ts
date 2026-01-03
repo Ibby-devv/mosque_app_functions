@@ -43,9 +43,17 @@ export const onEventCreated = onDocumentCreated(
       if (eventData.time) {
         const dateFull = await timestampToString(eventData.date);
         const dateOnly = dateFull.split(" ")[0];
-        when = `${eventData.time} on ${dateOnly}`;
+        // Get day of week
+        const eventDate = (eventData.date || eventData.start_date).toDate();
+        const dayOfWeek = eventDate.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'Australia/Sydney' });
+        when = `${eventData.time} on ${dayOfWeek}, ${dateOnly}`;
       } else {
-        when = await timestampToString(eventData.start_date || eventData.date);
+        const eventTimestamp = eventData.start_date || eventData.date;
+        const eventDate = eventTimestamp.toDate();
+        const dayOfWeek = eventDate.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'Australia/Sydney' });
+        const dateFull = await timestampToString(eventTimestamp);
+        const dateOnly = dateFull.split(" ")[0];
+        when = `${dayOfWeek}, ${dateOnly}`;
       }
 
       // Send data-only message for consistent Notifee styling across all app states

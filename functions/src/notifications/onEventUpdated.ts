@@ -50,13 +50,15 @@ export const onEventUpdated = onDocumentUpdated(
         title: after.title,
       });
 
+      // Get mosque timezone once for all date operations
+      const mosqueTimezone = await getMosqueTimezone();
+
       // Check if event is in the past - don't notify for past events
       if (after.date || after.start_date) {
         const eventTimestamp = after.date || after.start_date;
         const eventDate = eventTimestamp.toDate();
         
         // Get current time in mosque timezone
-        const mosqueTimezone = await getMosqueTimezone();
         const nowInMosqueTimezone = new Date(new Date().toLocaleString("en-US", { timeZone: mosqueTimezone }));
         
         // If event has a specific time, we need to parse it and compare with current time
@@ -94,8 +96,12 @@ export const onEventUpdated = onDocumentUpdated(
       
       // Format event date for notification
       // Format event date for notification (date only, no time)
-      const eventDateFull = await timestampToString(after.date || after.start_date);
-      const eventDate = eventDateFull.split(' ')[0];
+      const eventTimestamp = after.date || after.start_date;
+      const eventDateObj = eventTimestamp.toDate();
+      const dayOfWeek = eventDateObj.toLocaleDateString('en-US', { weekday: 'long', timeZone: mosqueTimezone });
+      const eventDateFull = await timestampToString(eventTimestamp);
+      const eventDateOnly = eventDateFull.split(' ')[0];
+      const eventDate = `${dayOfWeek}, ${eventDateOnly}`;
 
       // Track significant changes
       const changes: string[] = [];
@@ -123,8 +129,11 @@ export const onEventUpdated = onDocumentUpdated(
 
       // Date change
       if (before.date && after.date && before.date.toMillis() !== after.date.toMillis()) {
+        const beforeDateObj = before.date.toDate();
+        const beforeDayOfWeek = beforeDateObj.toLocaleDateString('en-US', { weekday: 'long', timeZone: mosqueTimezone });
         const beforeDateFull = await timestampToString(before.date);
-        const beforeDate = beforeDateFull.split(' ')[0];
+        const beforeDateOnly = beforeDateFull.split(' ')[0];
+        const beforeDate = `${beforeDayOfWeek}, ${beforeDateOnly}`;
         changes.push(`Date: ${beforeDate} → ${eventDate}`);
         if (!notificationBody) {
           notificationBody = `${after.title} rescheduled to ${eventDate}`;
