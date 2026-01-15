@@ -353,11 +353,15 @@ export const processScheduledIqamaChanges = onSchedule({
     });
     
     const parts = formatter.formatToParts(now);
+    let hour = parseInt(parts.find(p => p.type === 'hour')!.value);
+    // Handle edge case where formatToParts returns 24 for midnight
+    if (hour === 24) hour = 0;
+    
     const mosqueDate = {
       year: parseInt(parts.find(p => p.type === 'year')!.value),
       month: parseInt(parts.find(p => p.type === 'month')!.value),
       day: parseInt(parts.find(p => p.type === 'day')!.value),
-      hour: parseInt(parts.find(p => p.type === 'hour')!.value),
+      hour: hour,
       minute: parseInt(parts.find(p => p.type === 'minute')!.value),
     };
     
@@ -421,14 +425,16 @@ export const processScheduledIqamaChanges = onSchedule({
       }
 
       const currentTimeMinutes = mosqueDate.hour * 60 + mosqueDate.minute;
+      const iqamaTimeHours = Math.floor(iqamaTime / 60);
+      const iqamaTimeMinutes = iqamaTime % 60;
 
       // Check if current time is past this prayer's iqama time today
       // This ensures the scheduled change applies AFTER today's prayer is complete
       if (currentTimeMinutes >= iqamaTime) {
-        logger.info(`✅ Ready to apply: ${schedule.prayer} scheduled for tomorrow (current time: ${mosqueDate.hour}:${mosqueDate.minute}, iqama was at ${iqamaTimeStr})`);
+        logger.info(`✅ Ready to apply: ${schedule.prayer} scheduled for tomorrow (current: ${mosqueDate.hour}:${mosqueDate.minute.toString().padStart(2, '0')} = ${currentTimeMinutes}min, iqama was ${iqamaTimeStr} = ${iqamaTimeHours}:${iqamaTimeMinutes.toString().padStart(2, '0')} = ${iqamaTime}min)`);
         changesToApply.push(schedule);
       } else {
-        logger.info(`⏳ Not yet: ${schedule.prayer} scheduled for tomorrow (current: ${mosqueDate.hour}:${mosqueDate.minute}, waiting until after ${iqamaTimeStr})`);
+        logger.info(`⏳ Not yet: ${schedule.prayer} scheduled for tomorrow (current: ${mosqueDate.hour}:${mosqueDate.minute.toString().padStart(2, '0')} = ${currentTimeMinutes}min, iqama is ${iqamaTimeStr} = ${iqamaTimeHours}:${iqamaTimeMinutes.toString().padStart(2, '0')} = ${iqamaTime}min)`);
       }
     }
 
