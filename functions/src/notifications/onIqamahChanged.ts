@@ -18,7 +18,7 @@ export const onIqamahChanged = onDocumentUpdated(
     try {
       const before = event.data?.before.data();
       const after = event.data?.after.data();
-      
+
       if (!before || !after) {
         logger.error("No prayer times data found");
         return;
@@ -35,17 +35,37 @@ export const onIqamahChanged = onDocumentUpdated(
         const beforeIqama = before[iqamaField];
         const afterIqama = after[iqamaField];
 
-        if (beforeIqama !== afterIqama) {
-          const prayerName = prayer.charAt(0).toUpperCase() + prayer.slice(1);
-          changes.push(
-            `${prayerName}: ${beforeIqama} → ${afterIqama}`
-          );
+        if (beforeIqama === afterIqama) {
+          continue;
         }
+
+        const beforeType = before[`${prayer}_iqama_type`] || "fixed";
+        const afterType = after[`${prayer}_iqama_type`] || "fixed";
+        const beforeOffset = before[`${prayer}_iqama_offset`];
+        const afterOffset = after[`${prayer}_iqama_offset`];
+
+        const typeChanged = beforeType !== afterType;
+        const offsetChanged = beforeOffset !== afterOffset;
+
+        // Skip Adhan-driven recomputes: offset type unchanged, offset minutes unchanged,
+        // only the derived clock string moved with Adhan.
+        if (afterType === "offset" && !typeChanged && !offsetChanged) {
+          logger.info(
+            `Skipping notification for ${prayer}: offset Iqama recomputed from Adhan ` +
+              `(${beforeIqama} → ${afterIqama})`
+          );
+          continue;
+        }
+
+        const prayerName = prayer.charAt(0).toUpperCase() + prayer.slice(1);
+        changes.push(`${prayerName}: ${beforeIqama} → ${afterIqama}`);
       }
 
-      // If no iqamah changes, don't send notification
+      // If no notifiable iqamah changes, don't send notification
       if (changes.length === 0) {
-        logger.info("No Iqamah changes detected (Adhan times may have changed)");
+        logger.info(
+          "No notifiable Iqamah changes (Adhan-only or offset recomputes may have occurred)"
+        );
         return;
       }
 
@@ -83,7 +103,6 @@ export const onIqamahChanged = onDocumentUpdated(
         totalTokens: tokens.length,
         changes: changes,
       });
-
     } catch (error: any) {
       logger.error("❌ Error sending iqamah change notifications:", error);
     }

@@ -9,6 +9,88 @@ interface MosqueSettings {
   timezone?: string;
 }
 
+const PRAYERS = ["fajr", "dhuhr", "asr", "maghrib", "isha"] as const;
+
+/**
+ * Add minutes to a 12-hour time string (e.g. "5:41 PM" + 10 → "5:51 PM")
+ */
+export function addMinutesToTime(
+  adhanTime: string,
+  offsetMinutes: number
+): string | null {
+  const timeMatch = adhanTime.match(/(\d+):(\d+)\s*(AM|PM)/i);
+  if (!timeMatch) {
+    return null;
+  }
+
+  let hours = parseInt(timeMatch[1], 10);
+  const minutes = parseInt(timeMatch[2], 10);
+  const period = timeMatch[3].toUpperCase();
+
+  if (period === "PM" && hours !== 12) {
+    hours += 12;
+  } else if (period === "AM" && hours === 12) {
+    hours = 0;
+  }
+
+  const dayMinutes = 24 * 60;
+  let totalMinutes = hours * 60 + minutes + offsetMinutes;
+  totalMinutes = ((totalMinutes % dayMinutes) + dayMinutes) % dayMinutes;
+
+  let newHours = Math.floor(totalMinutes / 60);
+  const newMinutes = totalMinutes % 60;
+
+  const newPeriod = newHours >= 12 ? "PM" : "AM";
+  if (newHours > 12) {
+    newHours -= 12;
+  } else if (newHours === 0) {
+    newHours = 12;
+  }
+
+  return `${newHours}:${newMinutes.toString().padStart(2, "0")} ${newPeriod}`;
+}
+
+/**
+ * For prayers with iqama_type === 'offset', recompute *_iqama from Adhan + offset.
+ */
+export function recomputeOffsetIqamas(
+  currentData: Record<string, any>,
+  adhanTimes: Record<(typeof PRAYERS)[number], string>
+): Record<string, string> {
+  const updates: Record<string, string> = {};
+
+  for (const prayer of PRAYERS) {
+    const iqamaType = currentData[`${prayer}_iqama_type`];
+    if (iqamaType !== "offset") {
+      continue;
+    }
+
+    const offsetRaw = currentData[`${prayer}_iqama_offset`];
+    const offset =
+      typeof offsetRaw === "number"
+        ? offsetRaw
+        : typeof offsetRaw === "string"
+          ? parseInt(offsetRaw, 10)
+          : NaN;
+
+    if (!Number.isFinite(offset)) {
+      logger.warn(`⚠️ Offset Iqama for ${prayer} missing valid offset; skipping recompute`);
+      continue;
+    }
+
+    const adhanTime = adhanTimes[prayer];
+    const iqamaTime = addMinutesToTime(adhanTime, offset);
+    if (!iqamaTime) {
+      logger.warn(`⚠️ Could not compute offset Iqama for ${prayer} from adhan "${adhanTime}"`);
+      continue;
+    }
+
+    updates[`${prayer}_iqama`] = iqamaTime;
+  }
+
+  return updates;
+}
+
 /**
  * Calculate and update prayer times in Firestore using the adhan package
  * This function is shared between the daily scheduled update and the settings change trigger
@@ -41,12 +123,12 @@ export async function calculateAndUpdatePrayerTimes(
     // Calculate prayer times for today IN THE MOSQUE'S TIMEZONE
     // Get mosque timezone and create a date for today in that timezone
     const mosqueTimezone = mosqueSettings.timezone || "Australia/Sydney";
-    
+
     // Get today's date in the mosque's timezone
     const now = new Date();
     const dateString = now.toLocaleDateString("en-US", { timeZone: mosqueTimezone });
     const date = new Date(dateString); // This creates a Date at midnight in the mosque's timezone
-    
+
     const adhanPrayerTimes = new AdhanPrayerTimes(coordinates, date, params);
 
     // Convert Date objects to 12-hour format strings in mosque timezone
@@ -57,6 +139,14 @@ export async function calculateAndUpdatePrayerTimes(
         hour12: true,
         timeZone: mosqueTimezone,
       });
+    };
+
+    const adhanTimes = {
+      fajr: formatTime(adhanPrayerTimes.fajr),
+      dhuhr: formatTime(adhanPrayerTimes.dhuhr),
+      asr: formatTime(adhanPrayerTimes.asr),
+      maghrib: formatTime(adhanPrayerTimes.maghrib),
+      isha: formatTime(adhanPrayerTimes.isha),
     };
 
     // Get current server timestamp
@@ -74,23 +164,24 @@ export async function calculateAndUpdatePrayerTimes(
       throw new Error("Prayer times document does not exist");
     }
 
-    // Update only Adhan times, preserve all Iqama settings
+    const currentData = currentDoc.data() || {};
+    const offsetIqamaUpdates = recomputeOffsetIqamas(currentData, adhanTimes);
+
+    // Update Adhan times and recompute any offset-based Iqama times
     await prayerTimesRef.update({
-      fajr_adhan: formatTime(adhanPrayerTimes.fajr),
-      dhuhr_adhan: formatTime(adhanPrayerTimes.dhuhr),
-      asr_adhan: formatTime(adhanPrayerTimes.asr),
-      maghrib_adhan: formatTime(adhanPrayerTimes.maghrib),
-      isha_adhan: formatTime(adhanPrayerTimes.isha),
+      fajr_adhan: adhanTimes.fajr,
+      dhuhr_adhan: adhanTimes.dhuhr,
+      asr_adhan: adhanTimes.asr,
+      maghrib_adhan: adhanTimes.maghrib,
+      isha_adhan: adhanTimes.isha,
+      ...offsetIqamaUpdates,
       last_updated: sydneyTimestamp,
     });
 
     logger.info("✅ Prayer times calculated and updated successfully", {
       method: methodName,
-      fajr: formatTime(adhanPrayerTimes.fajr),
-      dhuhr: formatTime(adhanPrayerTimes.dhuhr),
-      asr: formatTime(adhanPrayerTimes.asr),
-      maghrib: formatTime(adhanPrayerTimes.maghrib),
-      isha: formatTime(adhanPrayerTimes.isha),
+      ...adhanTimes,
+      offsetIqamasUpdated: Object.keys(offsetIqamaUpdates),
       lastUpdated: sydneyTimestamp.toDate().toISOString(),
     });
   } catch (error) {
