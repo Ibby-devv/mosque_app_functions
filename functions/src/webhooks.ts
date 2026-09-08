@@ -756,8 +756,8 @@ async function handlePaymentIntentSucceeded(
       receipt_email_sent: false,
       receipt_sent_at: null,
 
-      // Timestamps
-      date: admin.firestore.FieldValue.serverTimestamp(),
+      // Timestamps — store calendar date in mosque TZ (not UTC Timestamp)
+      date: await getMosqueDateString(),
       created_at: admin.firestore.FieldValue.serverTimestamp(),
       completed_at: admin.firestore.FieldValue.serverTimestamp(),
       updated_at: admin.firestore.FieldValue.serverTimestamp(),
@@ -1041,8 +1041,8 @@ async function handleInvoicePaymentSucceeded(
   is_recurring: true,
   recurring_frequency: metadata.frequency || "monthly",
 
-      // Timestamps
-      date: admin.firestore.FieldValue.serverTimestamp(),
+      // Timestamps — store calendar date in mosque TZ (not UTC Timestamp)
+      date: await getMosqueDateString(),
       created_at: admin.firestore.FieldValue.serverTimestamp(),
       completed_at: admin.firestore.FieldValue.serverTimestamp(),
       updated_at: admin.firestore.FieldValue.serverTimestamp(),

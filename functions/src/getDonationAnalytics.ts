@@ -171,13 +171,56 @@ export const getDonationAnalytics = onCall(
 
       const donationsSnapshot = await donationsQuery.get();
 
-      // Helper to convert Firestore Timestamp to YYYY-MM-DD
-      const toYYYYMMDD = (timestamp: admin.firestore.Timestamp): string => {
-        if (!timestamp || !timestamp.toDate) return "";
-        const d = timestamp.toDate();
-        const y = d.getFullYear();
-        const m = String(d.getMonth() + 1).padStart(2, "0");
-        const day = String(d.getDate()).padStart(2, "0");
+      // Resolve mosque timezone once (Cloud Functions run in UTC; calendar dates
+      // must use the mosque's timezone or donations appear a day behind)
+      let mosqueTimezone = "Australia/Sydney";
+      try {
+        const settingsDoc = await db.collection("mosqueSettings").doc("info").get();
+        const tz = settingsDoc.data()?.timezone;
+        if (typeof tz === "string" && tz) {
+          mosqueTimezone = tz;
+        }
+      } catch (tzError) {
+        logger.warn("Could not fetch mosque timezone, using Australia/Sydney", tzError);
+      }
+
+      // Convert Firestore Timestamp or YYYY-MM-DD string to YYYY-MM-DD in mosque TZ
+      const toYYYYMMDD = (value: unknown): string => {
+        if (!value) return "";
+
+        // Already a calendar date string from getMosqueDateString()
+        if (typeof value === "string") {
+          if (/^\d{4}-\d{2}-\d{2}/.test(value)) {
+            return value.substring(0, 10);
+          }
+          return "";
+        }
+
+        let date: Date | null = null;
+        if (value instanceof admin.firestore.Timestamp) {
+          date = value.toDate();
+        } else if (
+          typeof value === "object" &&
+          value !== null &&
+          "toDate" in value &&
+          typeof (value as { toDate: unknown }).toDate === "function"
+        ) {
+          date = (value as admin.firestore.Timestamp).toDate();
+        }
+
+        if (!date) return "";
+
+        const parts = new Intl.DateTimeFormat("en-CA", {
+          timeZone: mosqueTimezone,
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+        }).formatToParts(date);
+
+        const y = parts.find((p) => p.type === "year")?.value;
+        const m = parts.find((p) => p.type === "month")?.value;
+        const day = parts.find((p) => p.type === "day")?.value;
+        if (!y || !m || !day) return "";
         return `${y}-${m}-${day}`;
       };
 
