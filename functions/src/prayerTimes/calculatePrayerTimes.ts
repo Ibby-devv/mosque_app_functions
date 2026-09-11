@@ -143,6 +143,7 @@ export async function calculateAndUpdatePrayerTimes(
 
     const adhanTimes = {
       fajr: formatTime(adhanPrayerTimes.fajr),
+      shuruq: formatTime(adhanPrayerTimes.sunrise),
       dhuhr: formatTime(adhanPrayerTimes.dhuhr),
       asr: formatTime(adhanPrayerTimes.asr),
       maghrib: formatTime(adhanPrayerTimes.maghrib),
@@ -167,9 +168,10 @@ export async function calculateAndUpdatePrayerTimes(
     const currentData = currentDoc.data() || {};
     const offsetIqamaUpdates = recomputeOffsetIqamas(currentData, adhanTimes);
 
-    // Update Adhan times and recompute any offset-based Iqama times
+    // Update Adhan times (incl. Shuruq/sunrise) and recompute any offset-based Iqama times
     await prayerTimesRef.update({
       fajr_adhan: adhanTimes.fajr,
+      shuruq_adhan: adhanTimes.shuruq,
       dhuhr_adhan: adhanTimes.dhuhr,
       asr_adhan: adhanTimes.asr,
       maghrib_adhan: adhanTimes.maghrib,
