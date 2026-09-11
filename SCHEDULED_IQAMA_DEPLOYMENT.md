@@ -2,7 +2,7 @@
 
 ## Overview
 
-This feature allows admins to schedule iqama time changes for future dates. When the scheduled date arrives, the change is applied automatically at the prayer's time on the day before, and push notifications are sent to mobile users.
+This feature allows admins to schedule iqama time changes for future dates. Each change is applied the day before the effective date, **30 minutes after the later of today's Iqama and the new Iqama**. That keeps countdown consumers from restarting while still updating the board so people who arrive later in the day see tomorrow's time. Push notifications are sent when the write lands (`onIqamahChanged`).
 
 ## Changes Made
 
@@ -13,11 +13,11 @@ Contains:
 - **`createScheduledIqamaChange`** - Callable function to create a scheduled change
 - **`deleteScheduledIqamaChange`** - Callable function to delete a scheduled change
 - **`getScheduledIqamaChanges`** - Callable function to retrieve scheduled changes
-- **`processScheduledIqamaChanges`** - Scheduled function (runs every 10 minutes) that:
-  - Checks for changes scheduled for tomorrow
-  - Compares current time against each prayer's adhan time
-  - Applies changes once prayer time has passed
-  - Updates `prayerTimes/current` document (triggers existing `onIqamahChanged` notification)
+- **`processScheduledIqamaChanges`** - Scheduled function (runs every 15 minutes) that:
+  - Checks for unapplied changes whose effective date is tomorrow, today, or in the past
+  - For tomorrow: applies after `max(today's Iqama, new Iqama) + 30 minutes`
+  - For today/past (missed run): applies immediately as catch-up
+  - Updates `prayerTimes/current` (triggers existing `onIqamahChanged` notification)
 
 #### 2. Updated Files
 - **`functions/src/index.ts`** - Added exports for new functions
@@ -46,34 +46,60 @@ Contains:
 3. **Document stored** with:
    - `effectiveDate`: December 20 at 00:00:00
    - `prayer`: e.g., 'fajr'
-   - `iqama_type`: 'fixed' or 'offset'
-   - `iqama_value`: Time string or offset minutes
+   - `iqama_time`: Fixed time string (e.g. "5:45 AM")
    - `applied`: false
 
 ### Application Flow
 
-1. **Scheduler runs** every 10 minutes
-2. **Checks** if current date = tomorrow's date for any scheduled change
-3. **If match found**, reads current prayer times to get today's adhan times
-4. **For each pending change**, checks if current time >= prayer's adhan time
-5. **When condition met**:
-   - Updates `prayerTimes/current` with new iqama settings
-   - Marks schedule as `applied: true`
-   - Sets `appliedAt` timestamp
-6. **Existing `onIqamahChanged` trigger** automatically sends push notification
+1. **Scheduler runs** every 15 minutes (`*/15 * * * *`, Australia/Sydney)
+2. **Loads** unapplied changes with `effectiveDate` through the end of tomorrow (mosque timezone; month/year rollover uses calendar date math, not `day + 1`)
+3. **Reads** `prayerTimes/current` for today's Iqama strings
+4. **For each pending change**:
+   - If effective date is **tomorrow**: apply when mosque time >= `max(today's Iqama, new Iqama) + 30 minutes`
+   - If effective date is **today or earlier**: apply immediately (catch-up)
+5. **When applied**:
+   - Updates `prayerTimes/current` with the new fixed Iqama time
+   - Marks schedule as `applied: true` and sets `appliedAt`
+6. **Existing `onIqamahChanged` trigger** sends the push notification
+
+### Apply buffer (30 minutes)
+
+`prayerTimes/current` is a single live timetable. After today's occurrence of a prayer, that slot is what visitors treat as **tomorrow's** time. Countdown clients also use that same field as "next Iqama".
+
+Those two consumers conflict if you write too early or too late:
+
+| When you apply | Countdown | Board later in the day |
+|---|---|---|
+| At today's Iqama (e.g. Isha 7:15 → 7:30 at 7:15) | Restarts to the new time | Correct for tomorrow |
+| At midnight on the effective date | Safe | Wrong all previous day (people see old Fajr) |
+| **30 min after `max(old, new)` Iqama** | Both times have passed, so "next" cannot jump back | Rest of the day shows tomorrow's time |
+
+**Rule:** `applyAfter = min(max(todayIqama, newIqama) + 30, 23:45)`
+
+- Isha 7:15 → 7:30: wait until **8:00 PM** (7:30 + 30)
+- Isha 7:30 → 7:15: wait until **8:00 PM** (today's 7:30 + 30, not the earlier new time)
+- Fajr 5:30 → 5:45: wait until **6:15 AM**, so Dhuhr/Asr/Isha visitors see 5:45 for tomorrow
+- Very late Iqama + 30 minutes past midnight: cap at **23:45** so the last 15-minute tick of the day still writes on D-1
+
+The 30-minute constant is `IQAMA_CHANGE_APPLY_BUFFER_MINUTES` in `functions/src/utils/iqamaSchedule.ts`.
 
 ### Example Timeline
 
-**Scenario:** Admin schedules Fajr iqama change for December 20
+**Scenario:** Admin schedules Fajr Iqama 5:30 AM → 5:45 AM for December 20
 
-- **December 17, 3:00 PM** - Admin creates schedule
-- **December 19, 5:30 AM** - Fajr adhan time occurs
-- **December 19, 5:35 AM** - Scheduler runs, detects:
-  - Current date (Dec 19) = effectiveDate (Dec 20) - 1 day ✓
-  - Current time (5:35 AM) >= Fajr adhan (5:30 AM) ✓
-- **December 19, 5:35 AM** - Change applied to Firestore
-- **December 19, 5:35 AM** - Mobile users receive notification
-- **December 20** - New iqama time is in effect
+- **December 17, 3:00 PM** — Admin creates schedule
+- **December 19, 5:30 AM** — Today's Fajr Iqama; scheduler **does not** write yet (countdown still on Fajr; 5:45 is still in the future)
+- **December 19, 5:45 AM** — New Fajr clock has also passed; still waiting for the 30-minute buffer
+- **December 19, 6:15 AM** — First scheduler run at/after 6:15 applies 5:45 AM to `prayerTimes/current`
+- **December 19, 6:15 AM** — Mobile users receive notification
+- **December 19, rest of day** — Board/app show 5:45 AM Fajr (tomorrow)
+- **December 20** — New Fajr Iqama is in effect
+
+**Scenario:** Isha 7:15 PM → 7:30 PM for December 20
+
+- **December 19, 7:15 PM** — Do not apply (countdown would restart to 7:30)
+- **December 19, 7:30 PM** — Do not apply (new time is "now")
+- **December 19, 8:00 PM** — Apply; Isha has finished; people leaving the mosque see 7:30 for tomorrow
 
 ## Deployment Steps
 
@@ -96,7 +122,7 @@ firebase deploy --only functions:createScheduledIqamaChange,functions:deleteSche
 
 **Expected Output:**
 - ✅ 3 new callable functions deployed
-- ✅ 1 new scheduled function deployed (runs every 10 minutes)
+- ✅ 1 new scheduled function deployed (runs every 15 minutes)
 
 ### Step 2: Deploy Firestore Rules and Indexes
 
@@ -161,11 +187,12 @@ firebase deploy --only hosting
 #### Test 4: Wait for Application (Manual)
 This requires waiting for the actual date/time:
 1. Create a schedule for tomorrow
-2. Wait until tomorrow's prayer time
-3. Within ~10 minutes after prayer time, check:
+2. Wait until **30 minutes after the later of today's Iqama and the new Iqama**
+3. Within ~15 minutes after that (scheduler interval), check:
    - Firestore: schedule marked `applied: true`
    - Firestore: `prayerTimes/current` updated with new value
    - Mobile app: Notification received
+   - Countdown clients: the prayer that just finished must not restart
 
 #### Test 5: Permissions
 1. Log in as user WITHOUT `EDIT_PRAYER_TIMES` permission
@@ -194,14 +221,14 @@ firebase functions:log --only processScheduledIqamaChanges
 ```
 
 Expected log messages:
-- Every 10 minutes: "🕌 Processing scheduled iqama changes..."
-- If no schedules: "No scheduled iqama changes to process for tomorrow"
-- If pending but not ready: "No scheduled changes ready to apply yet (waiting for prayer times)"
+- Every 15 minutes: "🕌 Processing scheduled iqama changes..."
+- If no schedules: "No scheduled iqama changes to process through tomorrow"
+- If pending but not ready: "⏳ Not yet" with the computed apply-after time
 - When applied: "✅ Successfully applied scheduled iqama changes"
 
 ### Check Function Invocations
 Firebase Console → Functions → Dashboard
-- Verify `processScheduledIqamaChanges` runs every 10 minutes
+- Verify `processScheduledIqamaChanges` runs every 15 minutes
 - Check for errors in any of the 4 new functions
 
 ### Check Firestore
@@ -243,11 +270,12 @@ await batch.commit();
 
 ## Known Limitations
 
-1. **Scheduling granularity**: Changes apply at prayer time ±10 minutes (scheduler interval)
+1. **Scheduling granularity**: Changes apply at `max(old, new) Iqama + 30 minutes`, then within the next 15-minute scheduler tick
 2. **One schedule per prayer per day**: Cannot schedule multiple changes for same prayer on same date
 3. **No edit capability**: Must delete and recreate to change scheduled date/value
 4. **No bulk scheduling**: Each prayer must be scheduled individually
-5. **Requires prayer times to exist**: Scheduler reads current day's adhan times
+5. **Requires prayer times to exist**: Scheduler reads current day's Iqama times
+6. **Late-night cap**: If Iqama + 30 minutes would cross midnight, the write is capped at 23:45 so it still lands on the day before
 
 ## Future Enhancements
 
@@ -273,37 +301,41 @@ If you encounter issues:
 
 ## Technical Notes
 
-### Why Apply at Prayer Time the Day Before?
+### Why Apply the Day Before, After a Buffer?
 
-**User Experience Consideration:**
-- Applying at midnight would wake users with notification
-- Applying on the scheduled day means users might miss notification before prayer
-- Applying at previous day's prayer time means:
-  - ✅ Users are awake/at mosque
-  - ✅ Timely advance notice (24 hours)
-  - ✅ Contextual timing (during relevant prayer)
+`prayerTimes/current` is shared by countdown UIs and the mosque timetable:
+
+- **Do not apply at Iqama time.** If Isha moves from 7:15 to 7:30 at 7:15, the countdown starts again.
+- **Do not apply at midnight on the effective date.** Everyone who visits during the previous day (Dhuhr, Asr, Isha) would still see yesterday's Fajr as "tomorrow".
+- **Apply 30 minutes after both today's Iqama and the new Iqama have passed.** Countdown for that prayer is finished, and the rest of the day shows tomorrow's time.
+
+Month/year boundaries (31 Jan → 1 Feb, 31 Dec → 1 Jan) use `addCalendarDays` so the scheduler can still find tomorrow's documents. A catch-up path applies any leftover unapplied change on the effective date itself.
 
 ### Scheduler Frequency Trade-off
 
-**10-minute interval chosen for balance:**
-- More frequent (every 5 min): Higher costs, minimal benefit
-- Less frequent (every 30 min): Delayed notifications, poor UX
-- 10 minutes: Good balance of cost and timeliness
+**15-minute interval:**
+- More frequent (every 5 min): Higher costs, little benefit on top of the 30-minute buffer
+- Less frequent (every 30 min): Can delay the board update by an hour after Iqama
+- 15 minutes: Aligns with the buffer without writing during the prayer itself
 
 ### Data Structure Design
 
-**Why store iqama_type and iqama_value separately:**
-- Preserves admin's chosen approach (fixed vs offset)
-- Allows recalculation of offset-based times
-- Maintains consistency with existing `prayerTimes` schema
+**Why store a fixed `iqama_time`:**
+- Scheduled writes always set `*_iqama` and `*_iqama_type: 'fixed'`
+- Daily Adhan recalculation does not overwrite fixed Iqama times
 
 **Why effectiveDate is date-only (midnight):**
-- Simplifies queries (exact match on date)
-- Prevents duplicate schedules for same prayer/day
-- Easier for admins to understand ("change on Dec 20")
+- Admins pick a calendar date ("change on Dec 20")
+- The scheduler classifies that date as tomorrow vs today/past in the mosque timezone
+- Duplicate schedules for the same prayer/day are still rejected on create
 
 ## Change Log
 
+- **2026-09-11**: Apply buffer and month-end rollover fix
+  - Apply each prayer `30 minutes` after `max(today's Iqama, new Iqama)` (not at Iqama time)
+  - Calendar date math for tomorrow so 1st-of-month schedules are found on the 31st
+  - Catch-up apply if a change is still unapplied on/after the effective date
+  - Shared helpers in `functions/src/utils/iqamaSchedule.ts`
 - **2025-12-15**: Initial implementation of scheduled iqama changes
   - Created 4 cloud functions (3 callable, 1 scheduled)
   - Added UI to admin dashboard Prayer Times tab

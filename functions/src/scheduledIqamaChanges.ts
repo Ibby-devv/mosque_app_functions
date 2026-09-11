@@ -9,6 +9,17 @@ import { logger } from "firebase-functions";
 import * as admin from "firebase-admin";
 import { hasPermission } from "./utils/roles";
 import { Permission } from "./utils/roles";
+import {
+  IQAMA_CHANGE_APPLY_BUFFER_MINUTES,
+  addCalendarDays,
+  getZonedDateTimeParts,
+  minutesSinceMidnight,
+  mosqueMidnightMillis,
+  parseTimeToMinutes,
+  classifyEffectiveDate,
+  decideScheduledIqamaApply,
+  formatMinuteOfDay,
+} from "./utils/iqamaSchedule";
 
 // ============================================================================
 // TYPE DEFINITIONS
@@ -84,24 +95,10 @@ export const createScheduledIqamaChange = onCall({
     }
     const mosqueTimezone = mosqueSettingsDoc.data()?.timezone || "Australia/Sydney";
     
-    // Parse the date string and convert to midnight in mosque timezone
     const [year, month, day] = effectiveDate.split('-').map(Number);
-    
-    // Create a date string that will be interpreted in the mosque timezone
-    // Using toLocaleString to get the date in the target timezone, then parsing it back
-    const dateStr = `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}T00:00:00`;
-    const tempDate = new Date(dateStr);
-    
-    // Convert to mosque timezone
-    const dateInMosqueTz = new Date(
-      tempDate.toLocaleString('en-US', { timeZone: mosqueTimezone })
+    const startOfDay = admin.firestore.Timestamp.fromMillis(
+      mosqueMidnightMillis(year, month, day, mosqueTimezone)
     );
-    
-    // Get UTC equivalent of midnight in mosque timezone
-    const utcOffset = tempDate.getTime() - dateInMosqueTz.getTime();
-    const midnightInMosqueTz = new Date(year, month - 1, day, 0, 0, 0, 0).getTime() + utcOffset;
-    
-    const startOfDay = admin.firestore.Timestamp.fromMillis(midnightInMosqueTz);
     
     // Validate that effectiveDate is in the future
     if (startOfDay.toMillis() <= now.toMillis()) {
@@ -305,7 +302,7 @@ export const getScheduledIqamaChanges = onCall({
 
 // ============================================================================
 // SCHEDULED FUNCTION: Process Scheduled Iqama Changes
-// Runs every 10 minutes to check for changes that should be applied
+// Runs every 15 minutes. Applies each prayer after max(today, new) + 30 min.
 // ============================================================================
 
 export const processScheduledIqamaChanges = onSchedule({
@@ -337,58 +334,50 @@ export const processScheduledIqamaChanges = onSchedule({
 
     // Use mosque's configured timezone, fallback to Australia/Sydney
     const mosqueTimezone = mosqueSettings.timezone || "Australia/Sydney";
-    logger.info(`Using mosque timezone: ${mosqueTimezone}`);
+    logger.info(
+      `Using mosque timezone: ${mosqueTimezone}; ` +
+        `apply buffer ${IQAMA_CHANGE_APPLY_BUFFER_MINUTES} minutes after ` +
+        `max(today's Iqama, new Iqama)`
+    );
 
-    const now = new Date();
-    
-    // Get current date in mosque's timezone
-    const formatter = new Intl.DateTimeFormat('en-US', {
-      timeZone: mosqueTimezone,
-      year: 'numeric',
-      month: 'numeric',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: 'numeric',
-      hour12: false
-    });
-    
-    const parts = formatter.formatToParts(now);
-    let hour = parseInt(parts.find(p => p.type === 'hour')!.value);
-    // Handle edge case where formatToParts returns 24 for midnight
-    if (hour === 24) hour = 0;
-    
-    const mosqueDate = {
-      year: parseInt(parts.find(p => p.type === 'year')!.value),
-      month: parseInt(parts.find(p => p.type === 'month')!.value),
-      day: parseInt(parts.find(p => p.type === 'day')!.value),
-      hour: hour,
-      minute: parseInt(parts.find(p => p.type === 'minute')!.value),
+    const mosqueDate = getZonedDateTimeParts(new Date(), mosqueTimezone);
+    const today: { year: number; month: number; day: number } = {
+      year: mosqueDate.year,
+      month: mosqueDate.month,
+      day: mosqueDate.day,
     };
-    
-    // Calculate tomorrow at midnight in mosque timezone
-    const tomorrowDateStr = `${mosqueDate.year}-${(mosqueDate.month).toString().padStart(2, '0')}-${(mosqueDate.day + 1).toString().padStart(2, '0')}T00:00:00`;
-    const tempDate = new Date(tomorrowDateStr);
-    const dateInMosqueTz = new Date(tempDate.toLocaleString('en-US', { timeZone: mosqueTimezone }));
-    const utcOffset = tempDate.getTime() - dateInMosqueTz.getTime();
-    const tomorrowMidnightInMosqueTz = new Date(mosqueDate.year, mosqueDate.month - 1, mosqueDate.day + 1, 0, 0, 0, 0).getTime() + utcOffset;
-    
-    const tomorrowTimestamp = admin.firestore.Timestamp.fromMillis(tomorrowMidnightInMosqueTz);
+    const tomorrow = addCalendarDays(today.year, today.month, today.day, 1);
+    const dayAfterTomorrow = addCalendarDays(today.year, today.month, today.day, 2);
 
-    // Get all unapplied scheduled changes for tomorrow
+    // Query unapplied changes through the end of tomorrow (inclusive of
+    // tomorrow midnight). Calendar addDays handles month/year rollover.
+    const endOfTomorrowMillis =
+      mosqueMidnightMillis(
+        dayAfterTomorrow.year,
+        dayAfterTomorrow.month,
+        dayAfterTomorrow.day,
+        mosqueTimezone
+      ) - 1;
+    const endOfTomorrow = admin.firestore.Timestamp.fromMillis(endOfTomorrowMillis);
+
+    logger.info(
+      `Mosque date ${today.year}-${today.month}-${today.day}; ` +
+        `tomorrow ${tomorrow.year}-${tomorrow.month}-${tomorrow.day}`
+    );
+
     const pendingChanges = await db
       .collection("scheduledIqamaChanges")
       .where("applied", "==", false)
-      .where("effectiveDate", "==", tomorrowTimestamp)
+      .where("effectiveDate", "<=", endOfTomorrow)
       .get();
 
     if (pendingChanges.empty) {
-      logger.info("No scheduled iqama changes to process for tomorrow");
+      logger.info("No scheduled iqama changes to process through tomorrow");
       return;
     }
 
-    logger.info(`Found ${pendingChanges.size} scheduled changes for tomorrow`);
+    logger.info(`Found ${pendingChanges.size} unapplied scheduled change(s) through tomorrow`);
 
-    // Get current prayer times to check adhan times
     const prayerTimesDoc = await db
       .collection("prayerTimes")
       .doc("current")
@@ -405,36 +394,49 @@ export const processScheduledIqamaChanges = onSchedule({
       return;
     }
 
-    // Process each scheduled change
+    const currentTimeMinutes = minutesSinceMidnight(mosqueDate.hour, mosqueDate.minute);
     const changesToApply: ScheduledIqamaChange[] = [];
     
     for (const doc of pendingChanges.docs) {
       const schedule = { id: doc.id, ...doc.data() } as ScheduledIqamaChange;
-      const iqamaTimeStr = currentPrayerTimes[`${schedule.prayer}_iqama`];
-      
-      if (!iqamaTimeStr) {
-        logger.warn(`⚠️ No iqama time found for ${schedule.prayer}`);
-        continue;
-      }
+      const effectiveParts = getZonedDateTimeParts(
+        schedule.effectiveDate.toDate(),
+        mosqueTimezone
+      );
+      const effectiveDateKind = classifyEffectiveDate(effectiveParts, today);
 
-      // Parse iqama time (e.g., "5:00 PM")
-      const iqamaTime = parseTime(iqamaTimeStr);
-      if (!iqamaTime) {
-        logger.warn(`⚠️ Could not parse iqama time: ${iqamaTimeStr}`);
-        continue;
-      }
+      const todayIqamaStr = currentPrayerTimes[`${schedule.prayer}_iqama`];
+      const todayIqamaMinutes = todayIqamaStr
+        ? parseTimeToMinutes(todayIqamaStr)
+        : null;
+      const newIqamaMinutes = parseTimeToMinutes(schedule.iqama_time);
 
-      const currentTimeMinutes = mosqueDate.hour * 60 + mosqueDate.minute;
-      const iqamaTimeHours = Math.floor(iqamaTime / 60);
-      const iqamaTimeMinutes = iqamaTime % 60;
+      const decision = decideScheduledIqamaApply({
+        currentMinutes: currentTimeMinutes,
+        todayIqamaMinutes,
+        newIqamaMinutes,
+        effectiveDateKind,
+      });
 
-      // Check if current time is past this prayer's iqama time today
-      // This ensures the scheduled change applies AFTER today's prayer is complete
-      if (currentTimeMinutes >= iqamaTime) {
-        logger.info(`✅ Ready to apply: ${schedule.prayer} scheduled for tomorrow (current: ${mosqueDate.hour}:${mosqueDate.minute.toString().padStart(2, '0')} = ${currentTimeMinutes}min, iqama was ${iqamaTimeStr} = ${iqamaTimeHours}:${iqamaTimeMinutes.toString().padStart(2, '0')} = ${iqamaTime}min)`);
+      if (decision.action === "apply") {
+        logger.info(
+          `✅ Ready to apply: ${schedule.prayer} ` +
+            `(${todayIqamaStr ?? "?"} → ${schedule.iqama_time}) ` +
+            `effective ${effectiveParts.year}-${effectiveParts.month}-${effectiveParts.day}; ` +
+            `now ${formatMinuteOfDay(currentTimeMinutes)}; ${decision.reason}`
+        );
         changesToApply.push(schedule);
+      } else if (decision.action === "wait") {
+        logger.info(
+          `⏳ Not yet: ${schedule.prayer} ` +
+            `(${todayIqamaStr ?? "?"} → ${schedule.iqama_time}); ` +
+            `now ${formatMinuteOfDay(currentTimeMinutes)}; ${decision.reason}` +
+            (decision.applyAfterMinutes != null
+              ? ` (apply after ${formatMinuteOfDay(decision.applyAfterMinutes)})`
+              : "")
+        );
       } else {
-        logger.info(`⏳ Not yet: ${schedule.prayer} scheduled for tomorrow (current: ${mosqueDate.hour}:${mosqueDate.minute.toString().padStart(2, '0')} = ${currentTimeMinutes}min, iqama is ${iqamaTimeStr} = ${iqamaTimeHours}:${iqamaTimeMinutes.toString().padStart(2, '0')} = ${iqamaTime}min)`);
+        logger.info(`⏭️ Skip: ${schedule.prayer}; ${decision.reason}`);
       }
     }
 
@@ -487,33 +489,4 @@ export const processScheduledIqamaChanges = onSchedule({
     logger.error("❌ Error processing scheduled iqama changes:", error);
   }
 });
-
-// ============================================================================
-// HELPER FUNCTIONS
-// ============================================================================
-
-/**
- * Parse time string (e.g., "5:30 AM") to minutes since midnight
- */
-function parseTime(timeStr: string): number | null {
-  try {
-    const match = timeStr.match(/(\d+):(\d+)\s*(AM|PM)/i);
-    if (!match) return null;
-
-    let hours = parseInt(match[1]);
-    const minutes = parseInt(match[2]);
-    const period = match[3].toUpperCase();
-
-    if (period === 'PM' && hours !== 12) {
-      hours += 12;
-    } else if (period === 'AM' && hours === 12) {
-      hours = 0;
-    }
-
-    return hours * 60 + minutes;
-  } catch (error) {
-    return null;
-  }
-}
-
 
