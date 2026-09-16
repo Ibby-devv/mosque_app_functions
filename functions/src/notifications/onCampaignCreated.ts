@@ -23,7 +23,7 @@ export const onCampaignCreated = onDocumentCreated(
         return;
       }
 
-      logger.info("💚 New campaign created, sending notifications...", {
+      logger.info("New campaign created, sending notifications...", {
         campaignId: event.params.campaignId,
         title: campaignData.title,
       });
@@ -38,16 +38,18 @@ export const onCampaignCreated = onDocumentCreated(
 
       // Format goal amount if available
       const goalAmount = campaignData.goal_amount;
-      const goalStr = goalAmount 
-        ? ` - Goal: $${(goalAmount / 100).toFixed(0)}`
+      const goalStr = goalAmount
+        ? `Goal $${(goalAmount / 100).toFixed(0)}`
         : "";
 
-      // Send data-only message for consistent Notifee styling across all app states
+      // Title = campaign name; body = short supporting line
       const messageData: Record<string, string> = {
         type: "campaign",
         campaignId: event.params.campaignId,
-        title: "💚 New Donation Campaign",
-        body: `${campaignData.title}${goalStr}`,
+        title: campaignData.title || "New donation campaign",
+        body: goalStr
+          ? `New campaign · ${goalStr}`
+          : "A new donation campaign is live",
         campaignTitle: campaignData.title || "",
         goalAmount: goalAmount?.toString() || "0",
         imageUrl: campaignData.image_url || "",

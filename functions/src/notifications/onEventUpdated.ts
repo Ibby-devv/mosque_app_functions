@@ -45,7 +45,7 @@ export const onEventUpdated = onDocumentUpdated(
         return;
       }
 
-      logger.info("📝 Event updated, checking for significant changes...", {
+      logger.info("Event updated, checking for significant changes...", {
         eventId: event.params.eventId,
         title: after.title,
       });
@@ -181,7 +181,7 @@ export const onEventUpdated = onDocumentUpdated(
         notificationBody = `${after.title} - ${changes.length} updates made`;
       }
 
-      logger.info("📣 Significant event changes detected:", { changes, notificationBody });
+      logger.info("Significant event changes detected:", { changes, notificationBody });
 
       // Get all active devices with notifications enabled
       const { tokens, deviceIds } = await getActiveTokens(90);
@@ -197,7 +197,7 @@ export const onEventUpdated = onDocumentUpdated(
       const messageData = {
         type: "event",
         eventId: event.params.eventId,
-        title: after.title || "📝 Event Updated",
+        title: after.title || "Event updated",
         body: notificationBody,
         eventTitle: after.title || "",
         date: eventDate,

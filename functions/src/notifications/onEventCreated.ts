@@ -23,7 +23,7 @@ export const onEventCreated = onDocumentCreated(
         return;
       }
 
-      logger.info("🎉 New event created, sending notifications...", {
+      logger.info("New event created, sending notifications...", {
         eventId: event.params.eventId,
         title: eventData.title,
       });
@@ -60,8 +60,8 @@ export const onEventCreated = onDocumentCreated(
       const messageData: Record<string, string> = {
         type: "event",
         eventId: event.params.eventId,
-        title: eventData.title || "🕌 New Event",
-        body: eventData.location ? `${when} at ${eventData.location}` : when,
+        title: eventData.title || "New event",
+        body: eventData.location ? `${when} · ${eventData.location}` : when,
         eventTitle: eventData.title || "",
         date: when,
         imageUrl: eventData.image_url || "",

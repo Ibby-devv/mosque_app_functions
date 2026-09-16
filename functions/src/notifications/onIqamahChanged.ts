@@ -24,11 +24,11 @@ export const onIqamahChanged = onDocumentUpdated(
         return;
       }
 
-      logger.info("🕌 Prayer times updated, checking for Iqamah changes...");
+      logger.info("Prayer times updated, checking for Iqamah changes...");
 
       // Check which Iqamah times changed
       const prayers = ["fajr", "dhuhr", "asr", "maghrib", "isha"];
-      const changes: string[] = [];
+      const changes: { name: string; before: string; after: string }[] = [];
 
       for (const prayer of prayers) {
         const iqamaField = `${prayer}_iqama`;
@@ -58,7 +58,11 @@ export const onIqamahChanged = onDocumentUpdated(
         }
 
         const prayerName = prayer.charAt(0).toUpperCase() + prayer.slice(1);
-        changes.push(`${prayerName}: ${beforeIqama} → ${afterIqama}`);
+        changes.push({
+          name: prayerName,
+          before: String(beforeIqama),
+          after: String(afterIqama),
+        });
       }
 
       // If no notifiable iqamah changes, don't send notification
@@ -69,7 +73,7 @@ export const onIqamahChanged = onDocumentUpdated(
         return;
       }
 
-      logger.info("📿 Iqamah times changed:", { changes });
+      logger.info("Iqamah times changed:", { changes });
 
       // Get all active devices with notifications enabled
       const { tokens, deviceIds } = await getActiveTokens(90);
@@ -79,14 +83,18 @@ export const onIqamahChanged = onDocumentUpdated(
         return;
       }
 
-      // Format notification message
-      const changesStr = changes.join(", ");
+      const title =
+        changes.length === 1 ? "Iqamah time updated" : "Iqamah times updated";
+      const body =
+        changes.length === 1
+          ? `${changes[0].name} iqamah is now ${changes[0].after}`
+          : changes.map((c) => `${c.name} ${c.after}`).join(" · ");
 
       // Send data-only message for consistent Notifee styling across all app states
       const messageData: Record<string, string> = {
         type: "prayer",
-        title: "📿 Prayer Time Update",
-        body: changesStr,
+        title,
+        body,
         changes: JSON.stringify(changes),
       };
 
