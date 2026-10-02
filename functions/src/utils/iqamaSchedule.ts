@@ -60,12 +60,12 @@ export function getZonedDateTimeParts(date: Date, timeZone: string): ZonedDateTi
     day: "numeric",
     hour: "numeric",
     minute: "numeric",
-    hour12: false,
+    hourCycle: "h23",
   });
 
   const parts = formatter.formatToParts(date);
   let hour = parseInt(parts.find((p) => p.type === "hour")!.value, 10);
-  // formatToParts can return 24 for midnight
+  // Some ICU builds still report midnight as 24
   if (hour === 24) hour = 0;
 
   return {
@@ -78,10 +78,33 @@ export function getZonedDateTimeParts(date: Date, timeZone: string): ZonedDateTi
 }
 
 /**
+ * UTC offset of `date` in `timeZone`, in minutes east of UTC.
+ * Positive for Australia/Sydney (UTC+10 / UTC+11).
+ */
+function timeZoneOffsetMinutes(date: Date, timeZone: string): number {
+  const parts = getZonedDateTimeParts(date, timeZone);
+  const asUtc = Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hour,
+    parts.minute,
+    0,
+    0
+  );
+  return Math.round((asUtc - date.getTime()) / 60000);
+}
+
+/**
  * Midnight in the mosque timezone as UTC millis.
  *
- * Uses the same offset construction as the original create/process functions
- * so stored `effectiveDate` timestamps still match scheduler queries.
+ * The offset is taken at local midnight, then checked again, because the
+ * UTC offset on a daylight-saving transition day is not the offset at
+ * 00:00 UTC. Australia/Sydney starts DST at 02:00 on the first Sunday in
+ * October: sampling 00:00 UTC that morning (11:00 AEDT) and applying UTC+11
+ * stores "Sunday midnight" as 23:00 Saturday. The scheduler then treats the
+ * effective date as today and catch-up applies before the 30-minute buffer,
+ * so an earlier new Fajr replaces today's later time during the prayer.
  */
 export function mosqueMidnightMillis(
   year: number,
@@ -89,15 +112,30 @@ export function mosqueMidnightMillis(
   day: number,
   mosqueTimezone: string
 ): number {
-  const dateStr =
-    `${year}-${month.toString().padStart(2, "0")}-` +
-    `${day.toString().padStart(2, "0")}T00:00:00`;
-  const tempDate = new Date(dateStr);
-  const dateInMosqueTz = new Date(
-    tempDate.toLocaleString("en-US", { timeZone: mosqueTimezone })
-  );
-  const utcOffset = tempDate.getTime() - dateInMosqueTz.getTime();
-  return new Date(year, month - 1, day, 0, 0, 0, 0).getTime() + utcOffset;
+  const utcGuess = Date.UTC(year, month - 1, day, 0, 0, 0, 0);
+  const offset = timeZoneOffsetMinutes(new Date(utcGuess), mosqueTimezone);
+  let millis = utcGuess - offset * 60 * 1000;
+  const offsetAtMidnight = timeZoneOffsetMinutes(new Date(millis), mosqueTimezone);
+  if (offsetAtMidnight !== offset) {
+    millis = utcGuess - offsetAtMidnight * 60 * 1000;
+  }
+  return millis;
+}
+
+/**
+ * Calendar day a stored effectiveDate refers to.
+ *
+ * New writes are mosque-local midnight. Documents created before the DST
+ * fix can be 23:00 on the previous evening (October transition). Those are
+ * one hour before the intended midnight, so snap them to the next calendar
+ * day. April's opposite error lands at 01:00 on the correct day and stays.
+ */
+export function effectiveCalendarDate(parts: ZonedDateTime): CalendarDate {
+  const minutes = parts.hour * 60 + parts.minute;
+  if (minutes >= 12 * 60) {
+    return addCalendarDays(parts.year, parts.month, parts.day, 1);
+  }
+  return { year: parts.year, month: parts.month, day: parts.day };
 }
 
 /**

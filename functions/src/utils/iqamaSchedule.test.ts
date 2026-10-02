@@ -6,6 +6,7 @@ import {
   applyAfterMinuteOfDay,
   classifyEffectiveDate,
   decideScheduledIqamaApply,
+  effectiveCalendarDate,
   getZonedDateTimeParts,
   mosqueMidnightMillis,
   parseTimeToMinutes,
@@ -96,6 +97,67 @@ describe("mosqueMidnightMillis", () => {
     assert.equal(created, processed);
     assert.ok(!Number.isNaN(processed));
   });
+
+  it("stores the Sunday DST-start midnight, not 23:00 the evening before", () => {
+    // 4 Oct 2026 is the first Sunday; clocks jump 02:00 → 03:00.
+    // Local midnight is still AEST (UTC+10) → 2026-10-03T14:00:00.000Z.
+    const millis = mosqueMidnightMillis(2026, 10, 4, tz);
+    assert.equal(new Date(millis).toISOString(), "2026-10-03T14:00:00.000Z");
+    const parts = getZonedDateTimeParts(new Date(millis), tz);
+    assert.deepEqual(
+      { year: parts.year, month: parts.month, day: parts.day, hour: parts.hour, minute: parts.minute },
+      { year: 2026, month: 10, day: 4, hour: 0, minute: 0 }
+    );
+  });
+
+  it("stores the Sunday DST-end midnight, not 01:00", () => {
+    // 5 Apr 2026 is the first Sunday; clocks fall 03:00 → 02:00.
+    // Local midnight is still AEDT (UTC+11) → 2026-04-04T13:00:00.000Z.
+    const millis = mosqueMidnightMillis(2026, 4, 5, tz);
+    assert.equal(new Date(millis).toISOString(), "2026-04-04T13:00:00.000Z");
+    const parts = getZonedDateTimeParts(new Date(millis), tz);
+    assert.equal(parts.day, 5);
+    assert.equal(parts.hour, 0);
+    assert.equal(parts.minute, 0);
+  });
+});
+
+describe("effectiveCalendarDate", () => {
+  it("keeps a real midnight on that calendar day", () => {
+    assert.deepEqual(
+      effectiveCalendarDate({ year: 2026, month: 10, day: 4, hour: 0, minute: 0 }),
+      { year: 2026, month: 10, day: 4 }
+    );
+  });
+
+  it("snaps a legacy October DST timestamp from 23:00 Saturday to Sunday", () => {
+    // Old offset math stored 4 Oct 2026 midnight as 2026-10-03T13:00:00.000Z.
+    const parts = getZonedDateTimeParts(
+      new Date("2026-10-03T13:00:00.000Z"),
+      "Australia/Sydney"
+    );
+    assert.equal(parts.day, 3);
+    assert.equal(parts.hour, 23);
+    assert.deepEqual(effectiveCalendarDate(parts), {
+      year: 2026,
+      month: 10,
+      day: 4,
+    });
+  });
+
+  it("keeps an April DST timestamp that landed at 01:00 on the correct day", () => {
+    const parts = getZonedDateTimeParts(
+      new Date("2026-04-04T14:00:00.000Z"),
+      "Australia/Sydney"
+    );
+    assert.equal(parts.day, 5);
+    assert.equal(parts.hour, 1);
+    assert.deepEqual(effectiveCalendarDate(parts), {
+      year: 2026,
+      month: 4,
+      day: 5,
+    });
+  });
 });
 
 describe("parseTimeToMinutes", () => {
@@ -166,6 +228,46 @@ describe("decideScheduledIqamaApply", () => {
       effectiveDateKind: "tomorrow",
     });
     assert.equal(decision.action, "apply");
+  });
+
+  it("does not apply an earlier Fajr at today's later Iqama", () => {
+    // Tomorrow is 5:45, today is 6:00. Writing at 6:00 puts 5:45 before now
+    // and the countdown leaves today's congregation.
+    const atToday = decideScheduledIqamaApply({
+      currentMinutes: parseTimeToMinutes("6:00 AM")!,
+      todayIqamaMinutes: parseTimeToMinutes("6:00 AM")!,
+      newIqamaMinutes: fajr545,
+      effectiveDateKind: "tomorrow",
+    });
+    assert.equal(atToday.action, "wait");
+
+    const afterBuffer = decideScheduledIqamaApply({
+      currentMinutes: parseTimeToMinutes("6:30 AM")!,
+      todayIqamaMinutes: parseTimeToMinutes("6:00 AM")!,
+      newIqamaMinutes: fajr545,
+      effectiveDateKind: "tomorrow",
+    });
+    assert.equal(afterBuffer.action, "apply");
+  });
+
+  it("keeps the 30-minute buffer for a DST-shifted Sunday Fajr on Saturday morning", () => {
+    const legacySundayMidnight = getZonedDateTimeParts(
+      new Date("2026-10-03T13:00:00.000Z"),
+      "Australia/Sydney"
+    );
+    const effectiveDay = effectiveCalendarDate(legacySundayMidnight);
+    const saturday = { year: 2026, month: 10, day: 3 };
+    const kind = classifyEffectiveDate(effectiveDay, saturday);
+    assert.equal(kind, "tomorrow");
+
+    const atFajr = decideScheduledIqamaApply({
+      currentMinutes: parseTimeToMinutes("5:45 AM")!,
+      todayIqamaMinutes: parseTimeToMinutes("6:00 AM")!,
+      newIqamaMinutes: fajr545,
+      effectiveDateKind: kind,
+    });
+    assert.equal(atFajr.action, "wait");
+    assert.equal(atFajr.applyAfterMinutes, parseTimeToMinutes("6:30 AM"));
   });
 
   it("applies Fajr after both times plus buffer so the rest of the day shows tomorrow", () => {

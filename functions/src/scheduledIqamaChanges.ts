@@ -18,6 +18,7 @@ import {
   parseTimeToMinutes,
   classifyEffectiveDate,
   decideScheduledIqamaApply,
+  effectiveCalendarDate,
   formatMinuteOfDay,
 } from "./utils/iqamaSchedule";
 
@@ -403,7 +404,10 @@ export const processScheduledIqamaChanges = onSchedule({
         schedule.effectiveDate.toDate(),
         mosqueTimezone
       );
-      const effectiveDateKind = classifyEffectiveDate(effectiveParts, today);
+      // Snap legacy DST-shifted midnights (23:00 the evening before) onto
+      // the calendar day the admin actually picked.
+      const effectiveDay = effectiveCalendarDate(effectiveParts);
+      const effectiveDateKind = classifyEffectiveDate(effectiveDay, today);
 
       const todayIqamaStr = currentPrayerTimes[`${schedule.prayer}_iqama`];
       const todayIqamaMinutes = todayIqamaStr
@@ -422,7 +426,7 @@ export const processScheduledIqamaChanges = onSchedule({
         logger.info(
           `✅ Ready to apply: ${schedule.prayer} ` +
             `(${todayIqamaStr ?? "?"} → ${schedule.iqama_time}) ` +
-            `effective ${effectiveParts.year}-${effectiveParts.month}-${effectiveParts.day}; ` +
+            `effective ${effectiveDay.year}-${effectiveDay.month}-${effectiveDay.day}; ` +
             `now ${formatMinuteOfDay(currentTimeMinutes)}; ${decision.reason}`
         );
         changesToApply.push(schedule);
