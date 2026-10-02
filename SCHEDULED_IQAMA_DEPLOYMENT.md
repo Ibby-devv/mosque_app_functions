@@ -44,7 +44,7 @@ Contains:
 1. **Admin selects date** (e.g., December 20)
 2. **Current iqama settings** (type and value) are saved to `scheduledIqamaChanges` collection
 3. **Document stored** with:
-   - `effectiveDate`: December 20 at 00:00:00
+   - `effectiveDate`: `"2026-12-20"` (the calendar day the admin picked, not a UTC instant)
    - `prayer`: e.g., 'fajr'
    - `iqama_time`: Fixed time string (e.g. "5:45 AM")
    - `applied`: false
@@ -52,7 +52,7 @@ Contains:
 ### Application Flow
 
 1. **Scheduler runs** every 15 minutes (`*/15 * * * *`, Australia/Sydney)
-2. **Loads** unapplied changes with `effectiveDate` through the end of tomorrow (mosque timezone; month/year rollover uses calendar date math, not `day + 1`)
+2. **Loads** unapplied changes and keeps those whose civil date is today or tomorrow (compared as calendar days in the mosque timezone)
 3. **Reads** `prayerTimes/current` for today's Iqama strings
 4. **For each pending change**:
    - If effective date is **tomorrow**: apply when mosque time >= `max(today's Iqama, new Iqama) + 30 minutes`
@@ -174,7 +174,7 @@ firebase deploy --only hosting
 # Check scheduledIqamaChanges collection
 # Verify document exists with:
 #   - prayer: 'fajr'
-#   - effectiveDate: Tomorrow at 00:00:00
+#   - effectiveDate: "YYYY-MM-DD" for tomorrow (a calendar day, not a timestamp)
 #   - applied: false
 ```
 
@@ -324,13 +324,18 @@ Month/year boundaries (31 Jan → 1 Feb, 31 Dec → 1 Jan) use `addCalendarDays`
 - Scheduled writes always set `*_iqama` and `*_iqama_type: 'fixed'`
 - Daily Adhan recalculation does not overwrite fixed Iqama times
 
-**Why effectiveDate is date-only (midnight):**
-- Admins pick a calendar date ("change on Dec 20")
-- The scheduler classifies that date as tomorrow vs today/past in the mosque timezone
-- Duplicate schedules for the same prayer/day are still rejected on create
+**Why `effectiveDate` is a `YYYY-MM-DD` string:**
+- Admins pick a calendar day ("change on Dec 20"), which is not a moment in time
+- Encoding that day as "midnight UTC" breaks when the UTC offset at midnight differs from the offset sampled elsewhere, which is what happens on the Australian daylight-saving Sundays
+- The scheduler turns "now" into a mosque calendar day with `Intl` and compares the two dates
+- Older documents that stored a midnight Timestamp are decoded by finding the civil date whose real local midnight is closest to that instant
+- Duplicate schedules for the same prayer and civil day are still rejected on create
 
 ## Change Log
 
+- **2026-10-02**: Store `effectiveDate` as a civil `YYYY-MM-DD` string
+  - Stops encoding the effective day as a midnight instant, which shifted by an hour on DST-change Sundays and made the scheduler catch-up apply before the 30-minute buffer
+  - Legacy midnight Timestamps still decode to the civil date they were meant to encode
 - **2026-09-11**: Apply buffer and month-end rollover fix
   - Apply each prayer `30 minutes` after `max(today's Iqama, new Iqama)` (not at Iqama time)
   - Calendar date math for tomorrow so 1st-of-month schedules are found on the 31st

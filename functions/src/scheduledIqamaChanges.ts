@@ -11,15 +11,19 @@ import { hasPermission } from "./utils/roles";
 import { Permission } from "./utils/roles";
 import {
   IQAMA_CHANGE_APPLY_BUFFER_MINUTES,
+  CalendarDate,
   addCalendarDays,
+  compareCalendarDates,
+  formatCivilDate,
+  formatMinuteOfDay,
   getZonedDateTimeParts,
   minutesSinceMidnight,
   mosqueMidnightMillis,
+  parseCivilDate,
   parseTimeToMinutes,
   classifyEffectiveDate,
   decideScheduledIqamaApply,
-  effectiveCalendarDate,
-  formatMinuteOfDay,
+  resolveEffectiveCivilDate,
 } from "./utils/iqamaSchedule";
 
 // ============================================================================
@@ -29,12 +33,37 @@ import {
 export interface ScheduledIqamaChange {
   id: string;
   prayer: 'fajr' | 'dhuhr' | 'asr' | 'maghrib' | 'isha';
-  effectiveDate: admin.firestore.Timestamp; // Date when change should be applied (midnight)
+  /** Civil date `YYYY-MM-DD`. Legacy documents may still hold a midnight Timestamp. */
+  effectiveDate: string | admin.firestore.Timestamp;
   iqama_time: string; // Fixed time only (e.g., "6:00 AM")
   applied: boolean;
   createdBy: string; // Admin user ID
   createdAt: admin.firestore.Timestamp;
   appliedAt?: admin.firestore.Timestamp;
+}
+
+function asDateOrCivilString(value: unknown): string | Date | null {
+  if (typeof value === "string") return value;
+  if (value instanceof Date) return value;
+  if (
+    value !== null &&
+    typeof value === "object" &&
+    "toDate" in value &&
+    typeof (value as { toDate: unknown }).toDate === "function"
+  ) {
+    const date = (value as { toDate: () => Date }).toDate();
+    return date instanceof Date ? date : null;
+  }
+  return null;
+}
+
+function readEffectiveCivilDate(
+  value: unknown,
+  timeZone: string
+): CalendarDate | null {
+  const stored = asDateOrCivilString(value);
+  if (stored == null) return null;
+  return resolveEffectiveCivilDate(stored, timeZone);
 }
 
 // ============================================================================
@@ -96,43 +125,49 @@ export const createScheduledIqamaChange = onCall({
     }
     const mosqueTimezone = mosqueSettingsDoc.data()?.timezone || "Australia/Sydney";
     
-    const [year, month, day] = effectiveDate.split('-').map(Number);
-    const startOfDay = admin.firestore.Timestamp.fromMillis(
-      mosqueMidnightMillis(year, month, day, mosqueTimezone)
-    );
-    
-    // Validate that effectiveDate is in the future
-    if (startOfDay.toMillis() <= now.toMillis()) {
+    const effectiveDay = parseCivilDate(effectiveDate);
+    if (!effectiveDay) {
+      throw new HttpsError("invalid-argument", "Effective date must be a real calendar date");
+    }
+
+    const mosqueNow = getZonedDateTimeParts(new Date(), mosqueTimezone);
+    const today: CalendarDate = {
+      year: mosqueNow.year,
+      month: mosqueNow.month,
+      day: mosqueNow.day,
+    };
+    // Compare calendar days in the mosque timezone. A date is not an instant,
+    // so this does not depend on which UTC offset midnight happens to have.
+    if (compareCalendarDates(effectiveDay, today) <= 0) {
       throw new HttpsError(
-        "invalid-argument", 
+        "invalid-argument",
         "Effective date must be in the future (at least tomorrow)"
       );
     }
-    
-    // Calculate end of day for date comparison
-    const endOfDay = admin.firestore.Timestamp.fromMillis(
-      startOfDay.toMillis() + (24 * 60 * 60 * 1000 - 1)
-    );
 
     const existingSchedules = await db
       .collection("scheduledIqamaChanges")
       .where("prayer", "==", prayer)
       .where("applied", "==", false)
-      .where("effectiveDate", ">=", startOfDay)
-      .where("effectiveDate", "<=", endOfDay)
+      .orderBy("effectiveDate", "asc")
       .get();
 
-    if (!existingSchedules.empty) {
+    const duplicate = existingSchedules.docs.some((doc) => {
+      const existingDay = readEffectiveCivilDate(doc.get("effectiveDate"), mosqueTimezone);
+      return existingDay != null && compareCalendarDates(existingDay, effectiveDay) === 0;
+    });
+
+    if (duplicate) {
       throw new HttpsError(
         "already-exists",
         `A scheduled change already exists for ${prayer} on this date`
       );
     }
 
-    // Create the scheduled change document
+    // Store the civil date the admin picked. Do not encode it as midnight.
     const scheduleData: Omit<ScheduledIqamaChange, 'id'> = {
       prayer,
-      effectiveDate: startOfDay, // Store as start of day for consistent querying
+      effectiveDate,
       iqama_time,
       applied: false,
       createdBy: request.auth.uid,
@@ -144,7 +179,7 @@ export const createScheduledIqamaChange = onCall({
     logger.info("✅ Scheduled iqama change created", {
       id: docRef.id,
       prayer,
-      effectiveDate: startOfDay.toDate().toISOString(),
+      effectiveDate,
       createdBy: request.auth.uid,
     });
 
@@ -257,6 +292,9 @@ export const getScheduledIqamaChanges = onCall({
 
   try {
     const db = admin.firestore();
+    const mosqueSettingsDoc = await db.collection("mosqueSettings").doc("info").get();
+    const mosqueTimezone = mosqueSettingsDoc.data()?.timezone || "Australia/Sydney";
+
     let query = db.collection("scheduledIqamaChanges")
       .orderBy("effectiveDate", "asc");
 
@@ -275,10 +313,23 @@ export const getScheduledIqamaChanges = onCall({
 
     snapshot.forEach((doc) => {
       const data = doc.data();
+      const effectiveDay = readEffectiveCivilDate(data.effectiveDate, mosqueTimezone);
+      if (!effectiveDay) {
+        logger.error("Skipping schedule with an unreadable effective date", { id: doc.id });
+        return;
+      }
       schedules.push({
         id: doc.id,
         prayer: data.prayer,
-        effectiveDate: data.effectiveDate.toMillis(), // Convert Timestamp to milliseconds
+        // Millis of that civil date's true local midnight, for clients that
+        // display `new Date(millis)` in the mosque timezone.
+        effectiveDate: mosqueMidnightMillis(
+          effectiveDay.year,
+          effectiveDay.month,
+          effectiveDay.day,
+          mosqueTimezone
+        ),
+        effectiveDay: formatCivilDate(effectiveDay),
         iqama_time: data.iqama_time,
         applied: data.applied,
         createdBy: data.createdBy,
@@ -286,6 +337,8 @@ export const getScheduledIqamaChanges = onCall({
         appliedAt: data.appliedAt?.toMillis(),
       });
     });
+
+    schedules.sort((a, b) => a.effectiveDay.localeCompare(b.effectiveDay));
 
     logger.info("✅ Retrieved scheduled iqama changes", {
       count: schedules.length,
@@ -342,34 +395,23 @@ export const processScheduledIqamaChanges = onSchedule({
     );
 
     const mosqueDate = getZonedDateTimeParts(new Date(), mosqueTimezone);
-    const today: { year: number; month: number; day: number } = {
+    const today: CalendarDate = {
       year: mosqueDate.year,
       month: mosqueDate.month,
       day: mosqueDate.day,
     };
     const tomorrow = addCalendarDays(today.year, today.month, today.day, 1);
-    const dayAfterTomorrow = addCalendarDays(today.year, today.month, today.day, 2);
-
-    // Query unapplied changes through the end of tomorrow (inclusive of
-    // tomorrow midnight). Calendar addDays handles month/year rollover.
-    const endOfTomorrowMillis =
-      mosqueMidnightMillis(
-        dayAfterTomorrow.year,
-        dayAfterTomorrow.month,
-        dayAfterTomorrow.day,
-        mosqueTimezone
-      ) - 1;
-    const endOfTomorrow = admin.firestore.Timestamp.fromMillis(endOfTomorrowMillis);
 
     logger.info(
-      `Mosque date ${today.year}-${today.month}-${today.day}; ` +
-        `tomorrow ${tomorrow.year}-${tomorrow.month}-${tomorrow.day}`
+      `Mosque date ${formatCivilDate(today)}; tomorrow ${formatCivilDate(tomorrow)}`
     );
 
+    // Civil dates are not instants, so the cutoff is tomorrow's calendar day.
+    // Legacy midnight Timestamps are decoded per document.
     const pendingChanges = await db
       .collection("scheduledIqamaChanges")
       .where("applied", "==", false)
-      .where("effectiveDate", "<=", endOfTomorrow)
+      .orderBy("effectiveDate", "asc")
       .get();
 
     if (pendingChanges.empty) {
@@ -400,13 +442,13 @@ export const processScheduledIqamaChanges = onSchedule({
     
     for (const doc of pendingChanges.docs) {
       const schedule = { id: doc.id, ...doc.data() } as ScheduledIqamaChange;
-      const effectiveParts = getZonedDateTimeParts(
-        schedule.effectiveDate.toDate(),
-        mosqueTimezone
-      );
-      // Snap legacy DST-shifted midnights (23:00 the evening before) onto
-      // the calendar day the admin actually picked.
-      const effectiveDay = effectiveCalendarDate(effectiveParts);
+      const effectiveDay = readEffectiveCivilDate(schedule.effectiveDate, mosqueTimezone);
+      if (!effectiveDay) {
+        logger.error("Skipping schedule with an unreadable effective date", {
+          id: schedule.id,
+        });
+        continue;
+      }
       const effectiveDateKind = classifyEffectiveDate(effectiveDay, today);
 
       const todayIqamaStr = currentPrayerTimes[`${schedule.prayer}_iqama`];
@@ -426,7 +468,7 @@ export const processScheduledIqamaChanges = onSchedule({
         logger.info(
           `✅ Ready to apply: ${schedule.prayer} ` +
             `(${todayIqamaStr ?? "?"} → ${schedule.iqama_time}) ` +
-            `effective ${effectiveDay.year}-${effectiveDay.month}-${effectiveDay.day}; ` +
+            `effective ${formatCivilDate(effectiveDay)}; ` +
             `now ${formatMinuteOfDay(currentTimeMinutes)}; ${decision.reason}`
         );
         changesToApply.push(schedule);
@@ -468,9 +510,10 @@ export const processScheduledIqamaChanges = onSchedule({
         appliedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
-      logger.info(`✅ Applied scheduled change for ${schedule.prayer}`, {
+        const effectiveDay = readEffectiveCivilDate(schedule.effectiveDate, mosqueTimezone);
+        logger.info(`✅ Applied scheduled change for ${schedule.prayer}`, {
         id: schedule.id,
-        effectiveDate: schedule.effectiveDate.toDate().toISOString(),
+        effectiveDate: effectiveDay ? formatCivilDate(effectiveDay) : null,
         iqama_time: schedule.iqama_time,
       });
     }

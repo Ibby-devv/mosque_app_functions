@@ -52,6 +52,31 @@ export function compareCalendarDates(a: CalendarDate, b: CalendarDate): number {
   return a.day - b.day;
 }
 
+/** Civil date, `YYYY-MM-DD`. This is a calendar day, not an instant. */
+export function formatCivilDate(date: CalendarDate): string {
+  const month = date.month.toString().padStart(2, "0");
+  const day = date.day.toString().padStart(2, "0");
+  return `${date.year}-${month}-${day}`;
+}
+
+export function parseCivilDate(value: string): CalendarDate | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const utc = new Date(Date.UTC(year, month - 1, day));
+  if (
+    utc.getUTCFullYear() !== year ||
+    utc.getUTCMonth() + 1 !== month ||
+    utc.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return { year, month, day };
+}
+
 export function getZonedDateTimeParts(date: Date, timeZone: string): ZonedDateTime {
   const formatter = new Intl.DateTimeFormat("en-US", {
     timeZone,
@@ -96,15 +121,36 @@ function timeZoneOffsetMinutes(date: Date, timeZone: string): number {
 }
 
 /**
- * Midnight in the mosque timezone as UTC millis.
+ * UTC millis for a civil date and clock time in an IANA timezone.
  *
- * The offset is taken at local midnight, then checked again, because the
- * UTC offset on a daylight-saving transition day is not the offset at
- * 00:00 UTC. Australia/Sydney starts DST at 02:00 on the first Sunday in
- * October: sampling 00:00 UTC that morning (11:00 AEDT) and applying UTC+11
- * stores "Sunday midnight" as 23:00 Saturday. The scheduler then treats the
- * effective date as today and catch-up applies before the 30-minute buffer,
- * so an earlier new Fajr replaces today's later time during the prayer.
+ * The offset is read at the candidate instant, then once more at the
+ * result. On a daylight-saving transition the offset at 00:00 UTC is not
+ * the offset at local midnight, so a single sample stores the wrong day.
+ */
+export function zonedDateTimeToUtcMillis(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  timeZone: string
+): number {
+  const utcGuess = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
+  const offset = timeZoneOffsetMinutes(new Date(utcGuess), timeZone);
+  let millis = utcGuess - offset * 60 * 1000;
+  const offsetAtResult = timeZoneOffsetMinutes(new Date(millis), timeZone);
+  if (offsetAtResult !== offset) {
+    millis = utcGuess - offsetAtResult * 60 * 1000;
+  }
+  return millis;
+}
+
+/**
+ * Local midnight as a UTC instant.
+ *
+ * Scheduled changes do not store this. A civil date is a `YYYY-MM-DD`
+ * string. This conversion exists for older documents that encoded the date
+ * as an instant, and for clients that still display `new Date(millis)`.
  */
 export function mosqueMidnightMillis(
   year: number,
@@ -112,43 +158,91 @@ export function mosqueMidnightMillis(
   day: number,
   mosqueTimezone: string
 ): number {
-  const utcGuess = Date.UTC(year, month - 1, day, 0, 0, 0, 0);
-  const offset = timeZoneOffsetMinutes(new Date(utcGuess), mosqueTimezone);
-  let millis = utcGuess - offset * 60 * 1000;
-  const offsetAtMidnight = timeZoneOffsetMinutes(new Date(millis), mosqueTimezone);
-  if (offsetAtMidnight !== offset) {
-    millis = utcGuess - offsetAtMidnight * 60 * 1000;
-  }
-  return millis;
+  return zonedDateTimeToUtcMillis(year, month, day, 0, 0, mosqueTimezone);
 }
 
 /**
- * Calendar day a stored effectiveDate refers to.
+ * Civil date encoded by an instant that was meant to be local midnight.
  *
- * New writes are mosque-local midnight. Documents created before the DST
- * fix can be 23:00 on the previous evening (October transition). Those are
- * one hour before the intended midnight, so snap them to the next calendar
- * day. April's opposite error lands at 01:00 on the correct day and stays.
+ * A correct midnight decodes to that calendar day. An older writer sampled
+ * the wrong UTC offset on DST-change days and missed midnight by an hour
+ * (23:00 the evening before, or 01:00). The date those writes were encoding
+ * is the calendar day whose true local midnight is closest to the instant.
  */
-export function effectiveCalendarDate(parts: ZonedDateTime): CalendarDate {
-  const minutes = parts.hour * 60 + parts.minute;
-  if (minutes >= 12 * 60) {
-    return addCalendarDays(parts.year, parts.month, parts.day, 1);
+export function civilDateFromMidnightInstant(
+  instant: Date,
+  timeZone: string
+): CalendarDate {
+  const parts = getZonedDateTimeParts(instant, timeZone);
+  const stampedDay: CalendarDate = {
+    year: parts.year,
+    month: parts.month,
+    day: parts.day,
+  };
+  if (parts.hour === 0 && parts.minute === 0) {
+    return stampedDay;
   }
-  return { year: parts.year, month: parts.month, day: parts.day };
+
+  const instantMs = instant.getTime();
+  const candidates = [
+    addCalendarDays(stampedDay.year, stampedDay.month, stampedDay.day, -1),
+    stampedDay,
+    addCalendarDays(stampedDay.year, stampedDay.month, stampedDay.day, 1),
+  ];
+
+  let best = stampedDay;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const candidate of candidates) {
+    const midnight = mosqueMidnightMillis(
+      candidate.year,
+      candidate.month,
+      candidate.day,
+      timeZone
+    );
+    const distance = Math.abs(midnight - instantMs);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = candidate;
+    }
+  }
+  return best;
+}
+
+/**
+ * Read a stored effective date.
+ *
+ * New documents store `YYYY-MM-DD`. Older documents store a Timestamp of
+ * local midnight; those are decoded back to the civil date they encode.
+ */
+export function resolveEffectiveCivilDate(
+  stored: string | Date,
+  timeZone: string
+): CalendarDate | null {
+  if (typeof stored === "string") {
+    return parseCivilDate(stored);
+  }
+  if (Number.isNaN(stored.getTime())) {
+    return null;
+  }
+  return civilDateFromMidnightInstant(stored, timeZone);
 }
 
 /**
  * Parse a 12-hour time string (e.g. "5:30 AM") to minutes since midnight.
  */
+/**
+ * Parse a civil clock time. Storage and the app use 12-hour strings
+ * (`5:45 AM`); this does not interpret them in a timezone.
+ */
 export function parseTimeToMinutes(timeStr: string): number | null {
   try {
-    const match = timeStr.match(/(\d+):(\d+)\s*(AM|PM)/i);
+    const match = timeStr.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
     if (!match) return null;
 
     let hours = parseInt(match[1], 10);
     const minutes = parseInt(match[2], 10);
     const period = match[3].toUpperCase();
+    if (hours < 1 || hours > 12 || minutes < 0 || minutes > 59) return null;
 
     if (period === "PM" && hours !== 12) {
       hours += 12;

@@ -4,12 +4,15 @@ import {
   IQAMA_CHANGE_APPLY_BUFFER_MINUTES,
   addCalendarDays,
   applyAfterMinuteOfDay,
+  civilDateFromMidnightInstant,
   classifyEffectiveDate,
   decideScheduledIqamaApply,
-  effectiveCalendarDate,
+  formatCivilDate,
   getZonedDateTimeParts,
   mosqueMidnightMillis,
+  parseCivilDate,
   parseTimeToMinutes,
+  resolveEffectiveCivilDate,
 } from "./iqamaSchedule";
 
 describe("addCalendarDays", () => {
@@ -122,41 +125,47 @@ describe("mosqueMidnightMillis", () => {
   });
 });
 
-describe("effectiveCalendarDate", () => {
-  it("keeps a real midnight on that calendar day", () => {
+describe("civil dates", () => {
+  const tz = "Australia/Sydney";
+
+  it("round-trips a YYYY-MM-DD string without an instant", () => {
+    const parsed = parseCivilDate("2026-10-04");
+    assert.deepEqual(parsed, { year: 2026, month: 10, day: 4 });
+    assert.equal(formatCivilDate(parsed!), "2026-10-04");
+    assert.equal(parseCivilDate("2026-02-31"), null);
+  });
+
+  it("decodes a real local midnight back to that calendar day", () => {
+    for (const [year, month, day] of [
+      [2026, 9, 12],
+      [2026, 10, 4],
+      [2026, 4, 5],
+      [2027, 1, 1],
+    ] as const) {
+      const instant = new Date(mosqueMidnightMillis(year, month, day, tz));
+      assert.deepEqual(civilDateFromMidnightInstant(instant, tz), { year, month, day });
+    }
+  });
+
+  it("reads the old October DST instant as the Sunday it was meant to encode", () => {
+    // Previous offset math stored 4 Oct 2026 midnight as Saturday 23:00.
+    const day = civilDateFromMidnightInstant(
+      new Date("2026-10-03T13:00:00.000Z"),
+      tz
+    );
+    assert.deepEqual(day, { year: 2026, month: 10, day: 4 });
     assert.deepEqual(
-      effectiveCalendarDate({ year: 2026, month: 10, day: 4, hour: 0, minute: 0 }),
+      resolveEffectiveCivilDate("2026-10-04", tz),
       { year: 2026, month: 10, day: 4 }
     );
   });
 
-  it("snaps a legacy October DST timestamp from 23:00 Saturday to Sunday", () => {
-    // Old offset math stored 4 Oct 2026 midnight as 2026-10-03T13:00:00.000Z.
-    const parts = getZonedDateTimeParts(
-      new Date("2026-10-03T13:00:00.000Z"),
-      "Australia/Sydney"
-    );
-    assert.equal(parts.day, 3);
-    assert.equal(parts.hour, 23);
-    assert.deepEqual(effectiveCalendarDate(parts), {
-      year: 2026,
-      month: 10,
-      day: 4,
-    });
-  });
-
-  it("keeps an April DST timestamp that landed at 01:00 on the correct day", () => {
-    const parts = getZonedDateTimeParts(
+  it("reads the old April DST instant as the Sunday it was meant to encode", () => {
+    const day = civilDateFromMidnightInstant(
       new Date("2026-04-04T14:00:00.000Z"),
-      "Australia/Sydney"
+      tz
     );
-    assert.equal(parts.day, 5);
-    assert.equal(parts.hour, 1);
-    assert.deepEqual(effectiveCalendarDate(parts), {
-      year: 2026,
-      month: 4,
-      day: 5,
-    });
+    assert.deepEqual(day, { year: 2026, month: 4, day: 5 });
   });
 });
 
@@ -166,6 +175,12 @@ describe("parseTimeToMinutes", () => {
     assert.equal(parseTimeToMinutes("12:00 AM"), 0);
     assert.equal(parseTimeToMinutes("12:00 PM"), 12 * 60);
     assert.equal(parseTimeToMinutes("7:15 PM"), 19 * 60 + 15);
+  });
+
+  it("rejects strings that are not a single clock time", () => {
+    assert.equal(parseTimeToMinutes("5:45:00 AM"), null);
+    assert.equal(parseTimeToMinutes("25:00 AM"), null);
+    assert.equal(parseTimeToMinutes(""), null);
   });
 });
 
@@ -251,11 +266,10 @@ describe("decideScheduledIqamaApply", () => {
   });
 
   it("keeps the 30-minute buffer for a DST-shifted Sunday Fajr on Saturday morning", () => {
-    const legacySundayMidnight = getZonedDateTimeParts(
+    const effectiveDay = civilDateFromMidnightInstant(
       new Date("2026-10-03T13:00:00.000Z"),
       "Australia/Sydney"
     );
-    const effectiveDay = effectiveCalendarDate(legacySundayMidnight);
     const saturday = { year: 2026, month: 10, day: 3 };
     const kind = classifyEffectiveDate(effectiveDay, saturday);
     assert.equal(kind, "tomorrow");
