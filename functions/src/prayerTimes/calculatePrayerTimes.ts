@@ -1,12 +1,76 @@
 import * as admin from "firebase-admin";
 import { logger } from "firebase-functions";
 import { Coordinates, CalculationMethod, PrayerTimes as AdhanPrayerTimes } from "adhan";
+import { getZonedDateTimeParts } from "../utils/iqamaSchedule";
 
 interface MosqueSettings {
   latitude: number;
   longitude: number;
   calculation_method?: string;
   timezone?: string;
+}
+
+export const DEFAULT_MOSQUE_TIMEZONE = "Australia/Sydney";
+
+export type AdhanTimes = {
+  fajr: string;
+  shuruq: string;
+  dhuhr: string;
+  asr: string;
+  maghrib: string;
+  isha: string;
+};
+
+/**
+ * Calendar date in the mosque timezone, as a Date whose local Y/M/D adhan-js will read.
+ *
+ * adhan-js uses getFullYear/getMonth/getDate (process-local) then emits UTC Date
+ * instants. Cloud Functions run in UTC; noon local keeps those parts on the mosque
+ * calendar day and avoids DST missing-hour issues around 2–3 AM.
+ */
+export function dateForAdhanCalculation(now: Date, mosqueTimezone: string): Date {
+  const parts = getZonedDateTimeParts(now, mosqueTimezone);
+  return new Date(parts.year, parts.month - 1, parts.day, 12, 0, 0, 0);
+}
+
+/**
+ * Format an adhan UTC instant as 12-hour clock time in the mosque IANA timezone.
+ * IANA zones such as Australia/Sydney include Australian daylight saving.
+ */
+export function formatPrayerTime(date: Date, mosqueTimezone: string): string {
+  return date.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: mosqueTimezone,
+  });
+}
+
+export function computeAdhanTimes(
+  latitude: number,
+  longitude: number,
+  methodName: string,
+  now: Date,
+  mosqueTimezone: string
+): AdhanTimes {
+  const coordinates = new Coordinates(latitude, longitude);
+  const methodFactory =
+    CalculationMethod[methodName as keyof typeof CalculationMethod];
+  if (typeof methodFactory !== "function") {
+    throw new Error(`Unknown calculation method: ${methodName}`);
+  }
+  const params = methodFactory();
+  const date = dateForAdhanCalculation(now, mosqueTimezone);
+  const adhanPrayerTimes = new AdhanPrayerTimes(coordinates, date, params);
+
+  return {
+    fajr: formatPrayerTime(adhanPrayerTimes.fajr, mosqueTimezone),
+    shuruq: formatPrayerTime(adhanPrayerTimes.sunrise, mosqueTimezone),
+    dhuhr: formatPrayerTime(adhanPrayerTimes.dhuhr, mosqueTimezone),
+    asr: formatPrayerTime(adhanPrayerTimes.asr, mosqueTimezone),
+    maghrib: formatPrayerTime(adhanPrayerTimes.maghrib, mosqueTimezone),
+    isha: formatPrayerTime(adhanPrayerTimes.isha, mosqueTimezone),
+  };
 }
 
 const PRAYERS = ["fajr", "dhuhr", "asr", "maghrib", "isha"] as const;
@@ -102,6 +166,7 @@ export async function calculateAndUpdatePrayerTimes(
     latitude: mosqueSettings.latitude,
     longitude: mosqueSettings.longitude,
     method: mosqueSettings.calculation_method,
+    timezone: mosqueSettings.timezone || DEFAULT_MOSQUE_TIMEZONE,
   });
 
   try {
@@ -110,45 +175,16 @@ export async function calculateAndUpdatePrayerTimes(
       throw new Error("Mosque location (latitude/longitude) not configured");
     }
 
-    // Set up coordinates
-    const coordinates = new Coordinates(
-      mosqueSettings.latitude,
-      mosqueSettings.longitude
-    );
-
-    // Get calculation method (default to MuslimWorldLeague if not specified)
     const methodName = mosqueSettings.calculation_method || "MuslimWorldLeague";
-    const params = CalculationMethod[methodName as keyof typeof CalculationMethod]();
-
-    // Calculate prayer times for today IN THE MOSQUE'S TIMEZONE
-    // Get mosque timezone and create a date for today in that timezone
-    const mosqueTimezone = mosqueSettings.timezone || "Australia/Sydney";
-
-    // Get today's date in the mosque's timezone
+    const mosqueTimezone = mosqueSettings.timezone || DEFAULT_MOSQUE_TIMEZONE;
     const now = new Date();
-    const dateString = now.toLocaleDateString("en-US", { timeZone: mosqueTimezone });
-    const date = new Date(dateString); // This creates a Date at midnight in the mosque's timezone
-
-    const adhanPrayerTimes = new AdhanPrayerTimes(coordinates, date, params);
-
-    // Convert Date objects to 12-hour format strings in mosque timezone
-    const formatTime = (date: Date): string => {
-      return date.toLocaleTimeString("en-US", {
-        hour: "numeric",
-        minute: "2-digit",
-        hour12: true,
-        timeZone: mosqueTimezone,
-      });
-    };
-
-    const adhanTimes = {
-      fajr: formatTime(adhanPrayerTimes.fajr),
-      shuruq: formatTime(adhanPrayerTimes.sunrise),
-      dhuhr: formatTime(adhanPrayerTimes.dhuhr),
-      asr: formatTime(adhanPrayerTimes.asr),
-      maghrib: formatTime(adhanPrayerTimes.maghrib),
-      isha: formatTime(adhanPrayerTimes.isha),
-    };
+    const adhanTimes = computeAdhanTimes(
+      mosqueSettings.latitude,
+      mosqueSettings.longitude,
+      methodName,
+      now,
+      mosqueTimezone
+    );
 
     // Get current server timestamp
     const sydneyTimestamp = admin.firestore.Timestamp.now();
@@ -182,6 +218,7 @@ export async function calculateAndUpdatePrayerTimes(
 
     logger.info("✅ Prayer times calculated and updated successfully", {
       method: methodName,
+      timezone: mosqueTimezone,
       ...adhanTimes,
       offsetIqamasUpdated: Object.keys(offsetIqamaUpdates),
       lastUpdated: sydneyTimestamp.toDate().toISOString(),
