@@ -71,8 +71,9 @@ On `cursor/fix-dst-iqama-apply-3929`:
 - The scheduler compares that civil date with today's mosque civil date. Tomorrow waits until 30 minutes after `max(today's Iqama, new Iqama)`. Today or earlier still catch-up applies.
 - Legacy Timestamp `effectiveDate` values are decoded with `resolveEffectiveCivilDate`.
 - `getScheduledIqamaChanges` returns `effectiveDay` (`YYYY-MM-DD`) and `effectiveDate` (millis of that day's real local midnight) so the current dashboard keeps rendering.
+- Adhan calculation no longer does `new Date(toLocaleDateString(...))`. `dateForAdhanCalculation` takes the mosque civil date from `getZonedDateTimeParts` and builds noon in the process zone so adhan-js reads that year, month, and day. Display still uses `timeZone: mosqueTimezone`. Stored Adhan and Iqama strings stay 12-hour (`5:45 AM`) in this change.
 
-Do not undo this. The dashboard should switch to `effectiveDay` and then the millis field can be removed.
+Do not undo this. The dashboard should switch to `effectiveDay` and then the millis field can be removed. The two other Fajr branches (`cursor/fix-iqama-dst-schedule-1585`, `cursor/fix-iqama-dst-midnight-f153`) were earlier attempts at the same scheduler bug, including a noon-snap decode. Do not merge them back.
 
 ## Rollout order
 
@@ -90,15 +91,9 @@ Iqama clock strings (`"5:45 AM"`) are already what the app countdown parses. You
 
 ### Adhan calculation
 
-`functions/src/prayerTimes/calculatePrayerTimes.ts` builds the adhan-js date with:
+Functions already use `dateForAdhanCalculation` in `functions/src/prayerTimes/calculatePrayerTimes.ts`. Leave that in place.
 
-```ts
-const date = new Date(now.toLocaleDateString("en-US", { timeZone: mosqueTimezone }));
-```
-
-The comment says this is midnight in the mosque timezone. It is not. On the UTC Cloud Functions runtime the calendar day happens to be right. Replace it: take `zonedParts(now, mosqueTimezone)` and construct the date adhan-js needs from those year, month, and day components (noon UTC, or noon in the process zone, so `getFullYear/getMonth/getDate` stay on that civil day). Format the resulting instants with `timeZone: mosqueTimezone`.
-
-The dashboard has the same block in `src/components/PrayerTimesTab.tsx` around the "Refresh" calculation. Fix both.
+The dashboard still has the old block in `src/components/PrayerTimesTab.tsx` around the "Refresh" calculation (`new Date(toLocaleDateString(...))`). Use the same civil-date construction: mosque year, month, and day at noon in the process zone, then format the adhan instants with `timeZone` set to the mosque zone.
 
 ### Event "already past" check
 
@@ -169,7 +164,7 @@ Display `effectiveDay` from `getScheduledIqamaChanges` as `DD-MM-YYYY` (`04-10-2
 
 ### Prayer time refresh
 
-`PrayerTimesTab.tsx` duplicates the functions adhan date bug (`new Date(toLocaleDateString(...))`). Use the same civil-date construction as the functions fix.
+`PrayerTimesTab.tsx` still builds the adhan date with `new Date(toLocaleDateString(...))`. Use the same `dateForAdhanCalculation` construction as functions.
 
 ### Donation range picker
 
