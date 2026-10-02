@@ -251,7 +251,7 @@ Functions (`npm test` in `functions/`):
 Dashboard:
 
 - Saving an event persists `event_date: "2026-10-04"` and `event_time: "14:30"`.
-- Reopening that event shows 4 Oct 2026, including when the test runner's zone is UTC.
+- The event list shows `04-10-2026`. Reopening the editor still loads `2026-10-04` into the date input when the test runner's zone is UTC.
 - `isPastEvent` uses the civil date, not `getDate()` on a Timestamp.
 
 App:
