@@ -10,7 +10,8 @@ import { calculateAndUpdatePrayerTimes } from "./calculatePrayerTimes";
 export const updatePrayerTimes = onSchedule(
   {
     schedule: "0 0 * * *",
-    timeZone: "Australia/Sydney", // Schedule timezone - runs at midnight Sydney time
+    // IANA zone so Cloud Scheduler follows AEDT/AEST (not a fixed UTC+10 offset)
+    timeZone: "Australia/Sydney",
     region: "australia-southeast1",
   },
   async () => {

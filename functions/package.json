@@ -4,7 +4,7 @@
     "lint": "eslint --ext .js,.ts .",
     "build": "tsc",
     "build:watch": "tsc --watch",
-    "test": "tsx --test src/utils/iqamaSchedule.test.ts",
+    "test": "tsx --test src/utils/iqamaSchedule.test.ts src/prayerTimes/calculatePrayerTimes.test.ts",
     "serve": "npm run build && firebase emulators:start --only functions",
     "shell": "npm run build && firebase functions:shell",
     "start": "npm run shell",
