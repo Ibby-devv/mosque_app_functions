@@ -7,27 +7,47 @@ import { onDocumentUpdated } from "firebase-functions/v2/firestore";
 import { logger } from "firebase-functions";
 import * as admin from "firebase-admin";
 import { getActiveTokens, cleanupInvalidTokens } from "../utils/tokenCleanup";
-import { buildDataOnlyMessage, timestampToString } from "../utils/messagingHelpers";
+import { buildDataOnlyMessage, getMosqueTimezone } from "../utils/messagingHelpers";
+import {
+  formatCivilDateDisplay,
+  isEventPastAt,
+  parseCivilDate,
+  weekdayLong,
+  civilDateFromMidnightInstant,
+  type CalendarDate,
+} from "../utils/iqamaSchedule";
 
-/**
- * Get mosque timezone from Firestore settings (with caching)
- * Falls back to Australia/Sydney if not configured
- */
-async function getMosqueTimezone(): Promise<string> {
-  try {
-    const db = admin.firestore();
-    const settingsDoc = await db.collection('mosqueSettings').doc('info').get();
-    const timezone = settingsDoc.data()?.timezone;
-    
-    if (timezone && typeof timezone === 'string') {
-      return timezone;
-    }
-  } catch (error) {
-    logger.warn('Could not fetch mosque timezone, using default:', error);
+function resolveEventCivilDate(
+  data: Record<string, any>,
+  mosqueTimezone: string
+): CalendarDate | null {
+  if (typeof data.event_date === "string") {
+    return parseCivilDate(data.event_date);
   }
+  const legacy = data.date || data.start_date;
+  if (legacy?.toDate) {
+    return civilDateFromMidnightInstant(legacy.toDate(), mosqueTimezone);
+  }
+  return null;
+}
 
-  // Default fallback
-  return 'Australia/Sydney';
+function formatEventDayLabel(
+  data: Record<string, any>,
+  mosqueTimezone: string
+): string {
+  const day = resolveEventCivilDate(data, mosqueTimezone);
+  if (!day) return "";
+  return `${weekdayLong(day, mosqueTimezone)}, ${formatCivilDateDisplay(day)}`;
+}
+
+function eventClock(data: Record<string, any>): string {
+  if (typeof data.event_time === "string" && data.event_time) {
+    return data.event_time;
+  }
+  if (typeof data.time === "string" && data.time) {
+    return data.time;
+  }
+  return "";
 }
 
 export const onEventUpdated = onDocumentUpdated(
@@ -39,7 +59,7 @@ export const onEventUpdated = onDocumentUpdated(
     try {
       const before = event.data?.before.data();
       const after = event.data?.after.data();
-      
+
       if (!before || !after) {
         logger.error("No event data found");
         return;
@@ -50,70 +70,38 @@ export const onEventUpdated = onDocumentUpdated(
         title: after.title,
       });
 
-      // Get mosque timezone once for all date operations
       const mosqueTimezone = await getMosqueTimezone();
 
-      // Check if event is in the past - don't notify for past events
-      if (after.date || after.start_date) {
-        const eventTimestamp = after.date || after.start_date;
-        const eventDate = eventTimestamp.toDate();
-        
-        // Get current time in mosque timezone
-        const nowInMosqueTimezone = new Date(new Date().toLocaleString("en-US", { timeZone: mosqueTimezone }));
-        
-        // If event has a specific time, we need to parse it and compare with current time
-        // Otherwise just compare dates (for all-day events)
-        if (after.time && typeof after.time === 'string') {
-          // Parse time string (e.g., "14:30" or "2:30 PM")
-          const timeParts = after.time.match(/(\d+):(\d+)/);
-          if (timeParts) {
-            const hours = parseInt(timeParts[1], 10);
-            const minutes = parseInt(timeParts[2], 10);
-            
-            // Adjust for AM/PM if present
-            let adjustedHours = hours;
-            if (after.time.toLowerCase().includes('pm') && hours !== 12) {
-              adjustedHours = hours + 12;
-            } else if (after.time.toLowerCase().includes('am') && hours === 12) {
-              adjustedHours = 0;
-            }
-            
-            eventDate.setHours(adjustedHours, minutes, 0, 0);
-          }
-        } else {
-          // No specific time, compare dates only (set to end of day)
-          eventDate.setHours(23, 59, 59, 999);
-        }
-        
-        if (eventDate < nowInMosqueTimezone) {
-          logger.info("Event is in the past, skipping notification", {
-            eventDate: eventDate.toISOString(),
-            currentTime: nowInMosqueTimezone.toISOString(),
-          });
+      const hasSchedule =
+        after.event_date || after.date || after.start_date || after.event_time || after.time;
+      if (hasSchedule) {
+        const legacyTs = after.date || after.start_date;
+        if (
+          isEventPastAt({
+            now: new Date(),
+            timeZone: mosqueTimezone,
+            eventDate: typeof after.event_date === "string" ? after.event_date : null,
+            eventTime: typeof after.event_time === "string" ? after.event_time : null,
+            legacyDate: legacyTs?.toDate ? legacyTs.toDate() : null,
+            legacyTime: typeof after.time === "string" ? after.time : null,
+          })
+        ) {
+          logger.info("Event is in the past, skipping notification");
           return;
         }
       }
-      
-      // Format event date for notification
-      // Format event date for notification (date only, no time)
-      const eventTimestamp = after.date || after.start_date;
-      const eventDateObj = eventTimestamp.toDate();
-      const dayOfWeek = eventDateObj.toLocaleDateString('en-US', { weekday: 'long', timeZone: mosqueTimezone });
-      const eventDateFull = await timestampToString(eventTimestamp);
-      const eventDateOnly = eventDateFull.split(' ')[0];
-      const eventDate = `${dayOfWeek}, ${eventDateOnly}`;
 
-      // Track significant changes
+      const eventDate = formatEventDayLabel(after, mosqueTimezone);
+      const afterClock = eventClock(after);
+      const beforeClock = eventClock(before);
+
       const changes: string[] = [];
-
-      // Check important fields and build user-friendly messages
       let notificationBody = "";
-      
+
       if (before.title !== after.title) {
         changes.push(`Title: ${before.title} → ${after.title}`);
       }
 
-      // Check if event was cancelled or reactivated first (most important)
       if (before.is_active !== after.is_active) {
         if (!after.is_active) {
           changes.push("Event has been cancelled");
@@ -121,69 +109,71 @@ export const onEventUpdated = onDocumentUpdated(
         } else {
           changes.push("Event has been reactivated");
           notificationBody = `${after.title} has been reactivated`;
-          if (after.date && after.time) {
-            notificationBody += ` - ${eventDate} at ${after.time}`;
+          if (eventDate && afterClock) {
+            notificationBody += ` - ${eventDate} at ${afterClock}`;
           }
         }
       }
 
-      // Date change
-      if (before.date && after.date && before.date.toMillis() !== after.date.toMillis()) {
-        const beforeDateObj = before.date.toDate();
-        const beforeDayOfWeek = beforeDateObj.toLocaleDateString('en-US', { weekday: 'long', timeZone: mosqueTimezone });
-        const beforeDateFull = await timestampToString(before.date);
-        const beforeDateOnly = beforeDateFull.split(' ')[0];
-        const beforeDate = `${beforeDayOfWeek}, ${beforeDateOnly}`;
+      const beforeDay = resolveEventCivilDate(before, mosqueTimezone);
+      const afterDay = resolveEventCivilDate(after, mosqueTimezone);
+      const dateChanged =
+        beforeDay &&
+        afterDay &&
+        (beforeDay.year !== afterDay.year ||
+          beforeDay.month !== afterDay.month ||
+          beforeDay.day !== afterDay.day);
+
+      if (dateChanged) {
+        const beforeDate = formatEventDayLabel(before, mosqueTimezone);
         changes.push(`Date: ${beforeDate} → ${eventDate}`);
         if (!notificationBody) {
           notificationBody = `${after.title} rescheduled to ${eventDate}`;
-          if (after.time) {
-            notificationBody += ` at ${after.time}`;
+          if (afterClock) {
+            notificationBody += ` at ${afterClock}`;
           }
         }
       }
 
-      // Time change
-      if (before.time !== after.time) {
-        changes.push(`Time: ${before.time} → ${after.time}`);
-        if (!notificationBody && after.time) {
-          notificationBody = `${after.title} time changed to ${after.time}`;
-          if (after.date) {
+      if (beforeClock !== afterClock) {
+        changes.push(`Time: ${beforeClock || "Not set"} → ${afterClock || "Not set"}`);
+        if (!notificationBody && afterClock) {
+          notificationBody = `${after.title} time changed to ${afterClock}`;
+          if (eventDate) {
             notificationBody += ` on ${eventDate}`;
           }
         }
       }
 
-      // Location change
       if (before.location !== after.location && (before.location || after.location)) {
-        changes.push(`Location: ${before.location || 'Not set'} → ${after.location || 'Not set'}`);
+        changes.push(
+          `Location: ${before.location || "Not set"} → ${after.location || "Not set"}`
+        );
         if (!notificationBody && after.location) {
           notificationBody = `${after.title} location changed to ${after.location}`;
         }
       }
 
-      // Speaker change
       if (before.speaker !== after.speaker && (before.speaker || after.speaker)) {
-        changes.push(`Speaker: ${before.speaker || 'Not set'} → ${after.speaker || 'Not set'}`);
+        changes.push(
+          `Speaker: ${before.speaker || "Not set"} → ${after.speaker || "Not set"}`
+        );
         if (!notificationBody && after.speaker) {
           notificationBody = `${after.title} speaker: ${after.speaker}`;
         }
       }
 
-      // If no significant changes, don't send notification
       if (changes.length === 0) {
         logger.info("No significant changes detected (description/image may have changed)");
         return;
       }
 
-      // Fallback if multiple changes
       if (!notificationBody) {
         notificationBody = `${after.title} - ${changes.length} updates made`;
       }
 
       logger.info("Significant event changes detected:", { changes, notificationBody });
 
-      // Get all active devices with notifications enabled
       const { tokens, deviceIds } = await getActiveTokens(90);
 
       if (tokens.length === 0) {
@@ -191,9 +181,6 @@ export const onEventUpdated = onDocumentUpdated(
         return;
       }
 
-      // Send notification to all tokens
-      // NOTE: Sending data-only message (no notification field) so the app
-      // can handle display with custom styling based on type
       const messageData = {
         type: "event",
         eventId: event.params.eventId,
@@ -206,10 +193,7 @@ export const onEventUpdated = onDocumentUpdated(
       };
 
       const message = buildDataOnlyMessage(messageData, tokens);
-
       const response = await admin.messaging().sendEachForMulticast(message);
-
-      // Clean up invalid tokens
       await cleanupInvalidTokens(tokens, response.responses, deviceIds);
 
       logger.info("✅ Event update notifications sent", {
@@ -218,7 +202,6 @@ export const onEventUpdated = onDocumentUpdated(
         totalTokens: tokens.length,
         changes: changes,
       });
-
     } catch (error: any) {
       logger.error("❌ Error sending event update notifications:", error);
     }

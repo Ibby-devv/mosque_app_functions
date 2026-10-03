@@ -7,9 +7,23 @@ import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { logger } from "firebase-functions";
 import * as admin from "firebase-admin";
 import Stripe from "stripe";
+import { getZonedDateTimeParts } from "./utils/iqamaSchedule";
 
 // NOTE: Stripe is initialized lazily in each function to ensure secrets are available
 const db = admin.firestore();
+
+async function getMosqueTimezone(): Promise<string> {
+  try {
+    const settingsDoc = await db.collection("mosqueSettings").doc("info").get();
+    const timezone = settingsDoc.data()?.timezone;
+    if (timezone && typeof timezone === "string") {
+      return timezone;
+    }
+  } catch (error) {
+    logger.warn("Could not fetch mosque timezone for receipt year, using default:", error);
+  }
+  return "Australia/Sydney";
+}
 
 // ============================================================================
 // HELPER: Check if Donation is Anonymous
@@ -441,18 +455,8 @@ export const cancelSubscription = onCall(
 
 export const generateReceiptNumber = async (): Promise<string> => {
   const counterRef = db.collection("receiptCounter").doc("current");
-  const now = new Date();
-  const sydneyDate = now
-    .toLocaleDateString("en-AU", {
-      timeZone: "Australia/Sydney",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    })
-    .split("/")
-    .reverse()
-    .join("-"); // Convert DD/MM/YYYY to YYYY-MM-DD for year extraction
-  const currentYear = parseInt(sydneyDate.split("-")[0]);
+  const mosqueTimezone = await getMosqueTimezone();
+  const currentYear = getZonedDateTimeParts(new Date(), mosqueTimezone).year;
 
   try {
     return await db.runTransaction(async (transaction) => {

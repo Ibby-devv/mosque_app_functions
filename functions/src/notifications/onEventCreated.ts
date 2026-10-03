@@ -7,7 +7,42 @@ import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import { logger } from "firebase-functions";
 import * as admin from "firebase-admin";
 import { getActiveTokens, cleanupInvalidTokens } from "../utils/tokenCleanup";
-import { buildDataOnlyMessage, timestampToString } from "../utils/messagingHelpers";
+import { buildDataOnlyMessage, getMosqueTimezone } from "../utils/messagingHelpers";
+import {
+  civilDateFromMidnightInstant,
+  formatCivilDateDisplay,
+  formatClockDisplay,
+  parseCivilDate,
+  parseClock,
+  weekdayLong,
+  type CalendarDate,
+} from "../utils/iqamaSchedule";
+
+function resolveEventCivilDate(
+  data: Record<string, any>,
+  mosqueTimezone: string
+): CalendarDate | null {
+  if (typeof data.event_date === "string") {
+    return parseCivilDate(data.event_date);
+  }
+  const legacy = data.date || data.start_date;
+  if (legacy?.toDate) {
+    return civilDateFromMidnightInstant(legacy.toDate(), mosqueTimezone);
+  }
+  return null;
+}
+
+function displayClock(data: Record<string, any>): string {
+  const raw =
+    (typeof data.event_time === "string" && data.event_time) ||
+    (typeof data.time === "string" && data.time) ||
+    "";
+  if (!raw) return "";
+  const minutes = parseClock(raw);
+  if (minutes == null) return raw;
+  // Prefer 12-hour display in notifications when we have a parseable clock
+  return formatClockDisplay(minutes);
+}
 
 export const onEventCreated = onDocumentCreated(
   {
@@ -17,7 +52,7 @@ export const onEventCreated = onDocumentCreated(
   async (event) => {
     try {
       const eventData = event.data?.data();
-      
+
       if (!eventData) {
         logger.error("No event data found");
         return;
@@ -28,7 +63,6 @@ export const onEventCreated = onDocumentCreated(
         title: eventData.title,
       });
 
-      // Get all active devices with notifications enabled
       const { tokens, deviceIds } = await getActiveTokens(90);
 
       if (tokens.length === 0) {
@@ -36,42 +70,34 @@ export const onEventCreated = onDocumentCreated(
         return;
       }
 
-      // Format date/time:
-      // Prefer human-entered time string combined with mosque-local date to avoid TZ drift
-      // When `time` is present, pair it with DATE-ONLY string (no time from `date`)
-      let when: string;
-      if (eventData.time) {
-        const dateFull = await timestampToString(eventData.date);
-        const dateOnly = dateFull.split(" ")[0];
-        // Get day of week
-        const eventDate = (eventData.date || eventData.start_date).toDate();
-        const dayOfWeek = eventDate.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'Australia/Sydney' });
-        when = `${eventData.time} on ${dayOfWeek}, ${dateOnly}`;
-      } else {
-        const eventTimestamp = eventData.start_date || eventData.date;
-        const eventDate = eventTimestamp.toDate();
-        const dayOfWeek = eventDate.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'Australia/Sydney' });
-        const dateFull = await timestampToString(eventTimestamp);
-        const dateOnly = dateFull.split(" ")[0];
-        when = `${dayOfWeek}, ${dateOnly}`;
+      const mosqueTimezone = await getMosqueTimezone();
+      const day = resolveEventCivilDate(eventData, mosqueTimezone);
+      const clock = displayClock(eventData);
+
+      let when = "";
+      if (day) {
+        const dayLabel = `${weekdayLong(day, mosqueTimezone)}, ${formatCivilDateDisplay(day)}`;
+        when = clock ? `${clock} on ${dayLabel}` : dayLabel;
+      } else if (clock) {
+        when = clock;
       }
 
-      // Send data-only message for consistent Notifee styling across all app states
       const messageData: Record<string, string> = {
         type: "event",
         eventId: event.params.eventId,
         title: eventData.title || "New event",
-        body: eventData.location ? `${when} · ${eventData.location}` : when,
+        body: eventData.location
+          ? when
+            ? `${when} · ${eventData.location}`
+            : eventData.location
+          : when,
         eventTitle: eventData.title || "",
         date: when,
         imageUrl: eventData.image_url || "",
       };
 
       const message = buildDataOnlyMessage(messageData, tokens);
-
       const response = await admin.messaging().sendEachForMulticast(message);
-
-      // Clean up invalid tokens
       await cleanupInvalidTokens(tokens, response.responses, deviceIds);
 
       logger.info("✅ Event notifications sent", {
@@ -79,7 +105,6 @@ export const onEventCreated = onDocumentCreated(
         failureCount: response.failureCount,
         totalTokens: tokens.length,
       });
-
     } catch (error: any) {
       logger.error("❌ Error sending event notifications:", error);
     }

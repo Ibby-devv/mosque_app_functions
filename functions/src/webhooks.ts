@@ -26,6 +26,7 @@ import {
   disputeAlertEmail,
   sendEmail,
 } from "./utils/emailTemplates";
+import { formatInstantDisplay } from "./utils/iqamaSchedule";
 
 const db = admin.firestore();
 
@@ -1175,9 +1176,13 @@ async function handleInvoicePaymentFailed(invoice: Stripe.Invoice) {
     // NOTE: Portal sessions are no longer created here as URLs expire too quickly
     // Users should update payment through the app
 
-    // Get next retry date if available
+    // Get next retry date if available (instant → mosque TZ DD-MM-YYYY)
+    const mosqueTimezone = await getMosqueTimezone();
     const nextRetry = invoice.next_payment_attempt
-      ? new Date(invoice.next_payment_attempt * 1000).toLocaleDateString("en-AU")
+      ? formatInstantDisplay(
+          new Date(invoice.next_payment_attempt * 1000),
+          mosqueTimezone
+        ).split(" ")[0]
       : undefined;
 
     // Send payment failure notification email using template
@@ -1265,6 +1270,12 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
         totalDonated += doc.data().amount || 0;
       });
 
+      const mosqueTimezone = await getMosqueTimezone();
+      const createdAt = recurringData?.created_at?.toDate?.();
+      const startDate = createdAt
+        ? formatInstantDisplay(createdAt, mosqueTimezone).split(" ")[0]
+        : undefined;
+
       const emailData = await subscriptionCancelledEmail({
         donorName: metadata.donor_name || recurringData?.donor_name || "Donor",
         amount: subscription.items.data[0]?.price?.unit_amount || recurringData?.amount || 0,
@@ -1272,7 +1283,7 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
         frequency: metadata.frequency || recurringData?.frequency || "monthly",
         donationType: metadata.donation_type_label || recurringData?.donation_type_label || "General Donation",
         totalDonated: totalDonated > 0 ? totalDonated : undefined,
-        startDate: recurringData?.created_at?.toDate?.()?.toLocaleDateString("en-AU"),
+        startDate,
       });
 
       await sendEmail({
@@ -1560,8 +1571,12 @@ async function handleDisputeCreated(
     // Send urgent admin email notification
     const adminEmail = "donations@alansar.app"; // TODO: Use a dedicated admin email
     const disputeAmount = (dispute.amount / 100).toFixed(2);
-    const disputeDueDate = dispute.evidence_details.due_by 
-      ? new Date(dispute.evidence_details.due_by * 1000).toLocaleDateString("en-AU")
+    const mosqueTimezone = await getMosqueTimezone();
+    const disputeDueDate = dispute.evidence_details.due_by
+      ? formatInstantDisplay(
+          new Date(dispute.evidence_details.due_by * 1000),
+          mosqueTimezone
+        ).split(" ")[0]
       : "Unknown";
 
     const disputeHtml = await disputeAlertEmail({

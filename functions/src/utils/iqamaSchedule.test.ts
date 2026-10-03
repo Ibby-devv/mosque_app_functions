@@ -8,11 +8,18 @@ import {
   classifyEffectiveDate,
   decideScheduledIqamaApply,
   formatCivilDate,
+  formatCivilDateDisplay,
+  formatClock,
+  formatClockDisplay,
+  formatInstantDisplay,
   getZonedDateTimeParts,
+  isEventPastAt,
   mosqueMidnightMillis,
   parseCivilDate,
+  parseClock,
   parseTimeToMinutes,
   resolveEffectiveCivilDate,
+  zonedDateTimeToUtcMillis,
 } from "./iqamaSchedule";
 
 describe("addCalendarDays", () => {
@@ -364,6 +371,80 @@ describe("classifyEffectiveDate", () => {
         { year: 2026, month: 1, day: 31 }
       ),
       "later"
+    );
+  });
+});
+
+describe("display and clock helpers", () => {
+  const tz = "Australia/Sydney";
+
+  it("formats 4 October 2026 as DD-MM-YYYY not slash or ISO", () => {
+    const display = formatCivilDateDisplay({ year: 2026, month: 10, day: 4 });
+    assert.equal(display, "04-10-2026");
+    assert.notEqual(display, "10/04/2026");
+    assert.notEqual(display, "04/10/2026");
+    assert.notEqual(display, "2026-10-04");
+  });
+
+  it("formats an instant as DD-MM-YYYY HH:mm without hour 24", () => {
+    // 4 Oct 2026 14:30 AEDT (UTC+11)
+    const instant = new Date(zonedDateTimeToUtcMillis(2026, 10, 4, 14, 30, tz));
+    assert.equal(formatInstantDisplay(instant, tz), "04-10-2026 14:30");
+
+    const midnight = new Date("2026-09-11T14:00:00.000Z"); // 12 Sep 00:00 AEST
+    assert.equal(formatInstantDisplay(midnight, tz), "12-09-2026 00:00");
+  });
+
+  it("parses HH:mm and h:mm AM/PM", () => {
+    assert.equal(parseClock("14:30"), 14 * 60 + 30);
+    assert.equal(parseClock("2:30 PM"), 14 * 60 + 30);
+    assert.equal(parseClock("5:45 AM"), 5 * 60 + 45);
+    assert.equal(parseClock("24:00"), null);
+    assert.equal(formatClock(14 * 60 + 30), "14:30");
+    assert.equal(formatClockDisplay(5 * 60 + 45), "5:45 AM");
+  });
+});
+
+describe("isEventPastAt", () => {
+  const tz = "Australia/Sydney";
+
+  it("treats 14:30 as not past at 10:00 the same civil day", () => {
+    const now = new Date(zonedDateTimeToUtcMillis(2026, 10, 4, 10, 0, tz));
+    assert.equal(
+      isEventPastAt({
+        now,
+        timeZone: tz,
+        eventDate: "2026-10-04",
+        eventTime: "14:30",
+      }),
+      false
+    );
+  });
+
+  it("treats 14:30 as past at 15:00 the same civil day", () => {
+    const now = new Date(zonedDateTimeToUtcMillis(2026, 10, 4, 15, 0, tz));
+    assert.equal(
+      isEventPastAt({
+        now,
+        timeZone: tz,
+        eventDate: "2026-10-04",
+        eventTime: "14:30",
+      }),
+      true
+    );
+  });
+
+  it("decodes a legacy midnight instant for the civil day", () => {
+    const now = new Date(zonedDateTimeToUtcMillis(2026, 10, 4, 10, 0, tz));
+    const legacy = new Date(mosqueMidnightMillis(2026, 10, 4, tz));
+    assert.equal(
+      isEventPastAt({
+        now,
+        timeZone: tz,
+        legacyDate: legacy,
+        legacyTime: "2:30 PM",
+      }),
+      false
     );
   });
 });

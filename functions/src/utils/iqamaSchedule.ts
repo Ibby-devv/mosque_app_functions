@@ -102,6 +102,104 @@ export function getZonedDateTimeParts(date: Date, timeZone: string): ZonedDateTi
   };
 }
 
+/** Alias used by the shared time-system contract. */
+export const zonedParts = getZonedDateTimeParts;
+
+/** User-visible civil date: `DD-MM-YYYY`. */
+export function formatCivilDateDisplay(date: CalendarDate): string {
+  const month = date.month.toString().padStart(2, "0");
+  const day = date.day.toString().padStart(2, "0");
+  return `${day}-${month}-${date.year}`;
+}
+
+/** User-visible instant in a zone: `DD-MM-YYYY HH:mm` (hourCycle h23). */
+export function formatInstantDisplay(instant: Date, timeZone: string): string {
+  const parts = getZonedDateTimeParts(instant, timeZone);
+  const hour = parts.hour.toString().padStart(2, "0");
+  const minute = parts.minute.toString().padStart(2, "0");
+  return `${formatCivilDateDisplay(parts)} ${hour}:${minute}`;
+}
+
+/** Storage clock: minutes since midnight → `HH:mm`. */
+export function formatClock(totalMinutes: number): string {
+  const minutes = ((totalMinutes % MINUTES_PER_DAY) + MINUTES_PER_DAY) % MINUTES_PER_DAY;
+  const hour = Math.floor(minutes / 60)
+    .toString()
+    .padStart(2, "0");
+  const minute = (minutes % 60).toString().padStart(2, "0");
+  return `${hour}:${minute}`;
+}
+
+/**
+ * Parse a civil clock. Accepts `HH:mm` and `h:mm AM/PM`.
+ * Returns minutes since midnight, or null if invalid.
+ */
+export function parseClock(value: string): number | null {
+  const trimmed = value.trim();
+  const twentyFour = /^(\d{1,2}):(\d{2})$/.exec(trimmed);
+  if (twentyFour) {
+    const hours = parseInt(twentyFour[1], 10);
+    const minutes = parseInt(twentyFour[2], 10);
+    if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+    return hours * 60 + minutes;
+  }
+  return parseTimeToMinutes(trimmed);
+}
+
+/** UI clock: minutes since midnight → `h:mm AM`. */
+export function formatClockDisplay(totalMinutes: number): string {
+  return formatMinuteOfDay(totalMinutes);
+}
+
+/** Long weekday for a civil date in a zone (e.g. Sunday). */
+export function weekdayLong(date: CalendarDate, timeZone: string): string {
+  const millis = mosqueMidnightMillis(date.year, date.month, date.day, timeZone);
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    timeZone,
+  }).format(new Date(millis));
+}
+
+/**
+ * Whether an event's civil date+clock is strictly before `now` in the mosque zone.
+ * Prefers `event_date` / `event_time`; falls back to a legacy midnight instant + time string.
+ * Missing clock → end of that civil day (23:59).
+ */
+export function isEventPastAt(opts: {
+  now: Date;
+  timeZone: string;
+  eventDate?: string | null;
+  eventTime?: string | null;
+  legacyDate?: Date | null;
+  legacyTime?: string | null;
+}): boolean {
+  let day: CalendarDate | null = null;
+  if (opts.eventDate && typeof opts.eventDate === "string") {
+    day = parseCivilDate(opts.eventDate);
+  } else if (opts.legacyDate && !Number.isNaN(opts.legacyDate.getTime())) {
+    day = civilDateFromMidnightInstant(opts.legacyDate, opts.timeZone);
+  }
+  if (!day) return false;
+
+  const clockSource = opts.eventTime ?? opts.legacyTime ?? null;
+  let eventMinutes = MINUTES_PER_DAY - 1; // 23:59 when no clock
+  if (clockSource && typeof clockSource === "string") {
+    const parsed = parseClock(clockSource);
+    if (parsed != null) eventMinutes = parsed;
+  }
+
+  const nowParts = getZonedDateTimeParts(opts.now, opts.timeZone);
+  const today: CalendarDate = {
+    year: nowParts.year,
+    month: nowParts.month,
+    day: nowParts.day,
+  };
+  const dayCmp = compareCalendarDates(day, today);
+  if (dayCmp < 0) return true;
+  if (dayCmp > 0) return false;
+  return eventMinutes < minutesSinceMidnight(nowParts.hour, nowParts.minute);
+}
+
 /**
  * UTC offset of `date` in `timeZone`, in minutes east of UTC.
  * Positive for Australia/Sydney (UTC+10 / UTC+11).
