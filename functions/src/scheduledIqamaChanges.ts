@@ -15,6 +15,7 @@ import {
   addCalendarDays,
   compareCalendarDates,
   formatCivilDate,
+  formatCivilDateDisplay,
   formatMinuteOfDay,
   getZonedDateTimeParts,
   minutesSinceMidnight,
@@ -186,7 +187,7 @@ export const createScheduledIqamaChange = onCall({
     return { 
       success: true, 
       id: docRef.id,
-      message: `Scheduled ${prayer} iqama change for ${effectiveDate}`
+      message: `Scheduled ${prayer} iqama change for ${formatCivilDateDisplay(effectiveDay)}`,
     };
 
   } catch (error: any) {
