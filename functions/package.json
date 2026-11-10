@@ -13,7 +13,7 @@
     "email:dev": "npx react-email dev --dir emails --port 3000"
   },
   "engines": {
-    "node": "20"
+    "node": "22"
   },
   "main": "lib/index.js",
   "dependencies": {

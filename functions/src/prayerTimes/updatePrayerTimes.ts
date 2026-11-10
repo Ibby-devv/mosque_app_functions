@@ -4,16 +4,17 @@ import { onSchedule } from "firebase-functions/v2/scheduler";
 import { calculateAndUpdatePrayerTimes } from "./calculatePrayerTimes";
 
 /**
- * Scheduled function that runs daily at midnight Sydney time
- * Automatically updates prayer times for the current day
+ * Scheduled function that runs daily at 00:05 Sydney time.
+ * Offset from midnight avoids racing the :00 processScheduledIqamaChanges tick.
  */
 export const updatePrayerTimes = onSchedule(
   {
-    schedule: "0 0 * * *",
+    schedule: "5 0 * * *",
     // IANA zone so Cloud Scheduler follows AEDT/AEST (not a fixed UTC+10 offset)
     timeZone: "Australia/Sydney",
     region: "australia-southeast1",
   },
+
   async () => {
     try {
       logger.info("🕌 Daily prayer times update triggered");
